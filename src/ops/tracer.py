@@ -3,11 +3,14 @@ import json
 import time
 import uuid
 import os
+from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-# 数据库文件路径（放在项目根目录）
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), ".trace.db")
+# 数据库文件路径（项目根目录下）
+# tracer.py 位于 src/ops/tracer.py，parents[2] 即 cortex 项目根目录。
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = PROJECT_ROOT / ".trace.db"
 
 def init_db():
     """初始化数据库表"""
