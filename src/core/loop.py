@@ -191,100 +191,134 @@ def run_loop(client: LLMClient):
         # 在调用 LLM 前，打印最终送进去的用户消息
         print(f"[DEBUG] 送LLM的用户消息预览: {history[-1]['content'][:100]}...")
 
-        # ----- 第一次 LLM 调用：决定是否调用工具 -----
-        try:
-            llm_start = time.time()  # 新增
+        # ----- Agent Loop：支持多步工具调用 -----
+        # 例如：list_notes -> read_note -> 最终回复
+        max_tool_rounds = 6
+        tool_round = 0
 
-            response = client.client.chat.completions.create(
-                model=client.model,
-                messages=history,
-                tools=tools,
-                tool_choice="auto",  # 让模型自己决定是否用工具
-                temperature=0.3,  # 降低随机性，确保稳定调用工具
-            )
+        while tool_round < max_tool_rounds:
+            tool_round += 1
+            llm_start = time.time()
 
-            llm_duration = (time.time() - llm_start) * 1000  # 新增
-            # 记录 LLM 调用（包含 Token 消耗）
-            usage = response.usage
-            log_event(
-                session_id,
-                "llm_call",
-                f"首次推理 (tools={len(tools)})",
-                duration_ms=llm_duration,
-                tokens_used=usage.total_tokens if usage else 0,
-                metadata={"model": client.model, "prompt_tokens": usage.prompt_tokens if usage else 0}
-            )
-        except Exception as e:
-            print(f"❌ 调用 LLM 失败: {e}")
-            continue
+            try:
+                response = client.client.chat.completions.create(
+                    model=client.model,
+                    messages=history,
+                    tools=tools,
+                    tool_choice="auto",
+                    temperature=0.3,
+                )
 
-        msg = response.choices[0].message
+                llm_duration = (time.time() - llm_start) * 1000
+                usage = response.usage
 
-        # ----- 处理工具调用 -----
-        if msg.tool_calls:
-            # 先将助手的原始回复（带工具调用指令）加入历史
+                # 记录每一轮 LLM 调用，方便 Dashboard 观察完整链路
+                log_event(
+                    session_id,
+                    "llm_call",
+                    f"第 {tool_round} 轮推理 (tools={len(tools)})",
+                    duration_ms=llm_duration,
+                    tokens_used=usage.total_tokens if usage else 0,
+                    metadata={
+                        "model": client.model,
+                        "prompt_tokens": usage.prompt_tokens if usage else 0,
+                        "completion_tokens": usage.completion_tokens if usage else 0,
+                        "tool_round": tool_round,
+                    },
+                )
+
+            except Exception as e:
+                print(f"❌ 第 {tool_round} 轮 LLM 调用失败: {e}")
+                log_event(
+                    session_id,
+                    "error",
+                    f"LLM 调用失败: {e}",
+                    metadata={"tool_round": tool_round},
+                )
+                break
+
+            msg = response.choices[0].message
+
+            # 没有工具调用：本轮就是最终回答
+            if not msg.tool_calls:
+                reply = msg.content or "（模型返回空内容）"
+                history.append({"role": "assistant", "content": reply})
+                remember_interaction(user_input, reply)
+                log_event(
+                    session_id,
+                    "response",
+                    reply,
+                    metadata={"tool_round": tool_round},
+                )
+                print(f"Cortex: {reply}")
+                break
+
+            # 有工具调用：必须先把 assistant tool_calls 放入 history
             history.append(msg.model_dump())
 
             for tool_call in msg.tool_calls:
                 tool_name = tool_call.function.name
 
-                tool_start = time.time()  # 新增
-                tool_args = json.loads(tool_call.function.arguments)
-
-                print(f"🔧 [工具调用] 正在调用工具: {tool_name}")  # 加上这行
-
-                # 从注册表中找到并执行对应的函数
-                tool_info = TOOL_REGISTRY.get(tool_name)
-                if not tool_info:
-                    result = f"错误：未知工具 {tool_name}"
+                try:
+                    tool_args = json.loads(tool_call.function.arguments or "{}")
+                except json.JSONDecodeError as e:
+                    result = f"工具参数解析失败: {e}"
+                    print(f"❌ [工具参数错误] {tool_name}: {e}")
+                    log_event(
+                        session_id,
+                        "tool_call",
+                        f"{tool_name}(参数解析失败)",
+                        metadata={"raw_arguments": tool_call.function.arguments},
+                    )
                 else:
-                    try:
-                        result = tool_info["func"](**tool_args)
-                    except Exception as e:
-                        result = f"工具执行出错: {e}"
+                    print(f"🔧 [工具调用 #{tool_round}] {tool_name}({tool_args})")
+                    tool_start = time.time()
 
-                # 在 history.append 前
-                result_str = str(result)
-                if len(result_str) > 2000:
-                    result_str = result_str[:2000] + "... (内容过长，已截断)"
+                    tool_info = TOOL_REGISTRY.get(tool_name)
+                    if not tool_info:
+                        result = f"错误：未知工具 {tool_name}"
+                    else:
+                        try:
+                            result = tool_info["func"](**tool_args)
+                        except Exception as e:
+                            result = f"工具执行出错: {e}"
 
+                    tool_duration = (time.time() - tool_start) * 1000
+                    result_str = str(result)
 
-                # 将工具执行结果作为一条消息加入历史（role = "tool"）
+                    # 防止单个文件内容过大直接撑爆上下文
+                    if len(result_str) > 2000:
+                        result_str = result_str[:2000] + "... (内容过长，已截断)"
+
+                    log_event(
+                        session_id,
+                        "tool_call",
+                        f"{tool_name}({tool_args})",
+                        duration_ms=tool_duration,
+                        metadata={
+                            "result_preview": str(result)[:200],
+                            "result_length": len(str(result)),
+                            "tool_round": tool_round,
+                        },
+                    )
+
+                # 工具结果必须使用对应 tool_call_id 回填
                 history.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": result_str,
+                        "content": str(result),
                     }
                 )
-                tool_duration = (time.time() - tool_start) * 1000  # 新增
-                log_event(
-                    session_id,
-                    "tool_call",
-                    f"{tool_name}({tool_args})",
-                    duration_ms=tool_duration,
-                    metadata={"result_preview": str(result)[:100]}
-                )
-            
 
-            # ----- 第二次 LLM 调用：根据工具结果生成最终回复 -----
-            try:
-                final_response = client.client.chat.completions.create(
-                    model=client.model,
-                    messages=history,
-                    temperature=0.7,
-                    max_tokens=1024  # 新增
-                )
-                final_reply = final_response.choices[0].message.content
-                log_event(session_id, "response", final_reply)  # 新增
-                history.append({"role": "assistant", "content": final_reply})
-                remember_interaction(user_input, final_reply)
-                print(f"Cortex: {final_reply}")
-            except Exception as e:
-                print(f"❌ 生成最终回复失败: {e}")
         else:
-            # 没有工具调用，直接回复
-            reply = msg.content or "（模型返回空内容）"
-            history.append({"role": "assistant", "content": reply})
-            remember_interaction(user_input, reply)
-            print(f"Cortex: {reply}")
+            # 达到最大工具轮数，避免模型无限调用工具
+            warning = "工具调用达到最大轮数，已停止继续调用。"
+            print(f"⚠️ {warning}")
+            log_event(
+                session_id,
+                "error",
+                warning,
+                metadata={"max_tool_rounds": max_tool_rounds},
+            )
+

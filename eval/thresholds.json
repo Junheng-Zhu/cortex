@@ -1,0 +1,20 @@
+{
+  "max_tool_rounds": 6,
+  "min_llm_calls_for_tool_chain": 3,
+  "required_event_types": [
+    "user_input",
+    "llm_call",
+    "tool_call",
+    "response"
+  ],
+  "required_tool_sequence_for_calendar_case": [
+    "list_notes",
+    "read_note"
+  ],
+  "required_read_note_filename": "calendar.txt",
+  "required_response_terms": [
+    "会议",
+    "PPT",
+    "开会"
+  ]
+}

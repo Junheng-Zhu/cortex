@@ -1,0 +1,33 @@
+[
+  {
+    "id": "calendar_discovery",
+    "query": "我的日程表也在笔记文件夹中，你找找看",
+    "expected_tool_sequence": [
+      "list_notes",
+      "read_note"
+    ],
+    "expected_filename": "calendar.txt",
+    "response_contains_all": [
+      "会议",
+      "PPT",
+      "开会"
+    ],
+    "min_llm_calls": 3,
+    "max_tool_calls": 2
+  },
+  {
+    "id": "missing_file",
+    "query": "请读取不存在的文件 missing.txt",
+    "expected_tool_sequence": [
+      "read_note"
+    ],
+    "expected_filename": "missing.txt",
+    "response_contains_any": [
+      "找不到",
+      "不存在",
+      "错误"
+    ],
+    "min_llm_calls": 2,
+    "max_tool_calls": 1
+  }
+]
