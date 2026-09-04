@@ -10,6 +10,6 @@ class Tool(ABC):
     @abstractmethod
     def execute(self,**kwargs)->Any:
         raise NotImplementedError
-    #kwaegs和raise也不太懂
+
 
     
