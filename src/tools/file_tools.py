@@ -64,7 +64,10 @@ class ReadNoteTool(Tool):
     description = "读取 notes 目录下指定文件的内容。"
     input_model = ReadNoteInput
 # Q1:input_model怎么指向一个类，而不是实例化成对象
-    def execute(self, fname: str):
-        ReadNoteInput(filename=fname)
-        
+    def execute(self, filename: str):
+        validated=ReadNoteInput(filename=filename)
+        # Q: 这里filename=filename正确吗
+        read_note(validated.filename)
+
+
         

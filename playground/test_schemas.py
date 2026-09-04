@@ -13,16 +13,16 @@ from src.tools.schemas import ReadNoteInput
 # tool_Read(path = "notes/python.md")
 # tool_Read(path = 123)
 
-tool_read = ReadNoteInput(path="notes/python.md")
+tool_read = ReadNoteInput(filename="python.md")
 
 print(tool_read)
-print(tool_read.path)
+print(tool_read.filename)
 print(type(tool_read))
 print(ReadNoteInput.model_json_schema())
 
 
-ReadNoteInput()
-print(ReadNoteInput.model_json_schema())
+# ReadNoteInput()
 
-ReadNoteInput(path=123)
-print(ReadNoteInput.model_json_schema())
+
+# ReadNoteInput(path=123)
+
