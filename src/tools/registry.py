@@ -14,5 +14,9 @@ class ToolRegistry:
         return self._tools.keys()
 
     def get(self, name: str) -> Tool:
+        tool=self._tools.get(name)
 
-        return self._tools.get(name)
+        if tool==None:
+            raise Exception
+
+        return tool
