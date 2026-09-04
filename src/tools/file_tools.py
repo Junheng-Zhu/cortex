@@ -1,6 +1,8 @@
 import os
 import glob
 from typing import List, Dict, Any
+from .base import Tool
+from .schemas import ReadNoteInput
 
 # 设置笔记目录（项目根目录下的 notes 文件夹）
 NOTES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "notes")
@@ -56,3 +58,13 @@ TOOL_REGISTRY = {
         },
     },
 }
+
+class ReadNoteTool(Tool):
+    name = "read_note"
+    description = "读取 notes 目录下指定文件的内容。"
+    input_model = ReadNoteInput
+# Q1:input_model怎么指向一个类，而不是实例化成对象
+    def execute(self, fname: str):
+        ReadNoteInput(filename=fname)
+        
+        
