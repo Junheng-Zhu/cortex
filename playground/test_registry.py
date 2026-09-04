@@ -1,14 +1,28 @@
 # playground/test_registry.py
-from cortex.src.tools.base import Tool
-from cortex.src.tools.registry import ToolRegistry
-#这两个类怎么导包进来
-#还有要在那个终端位置执行python xxx.py;(venv) PS D:\pyproject\cortex> 
+
+import sys
+import os
+
+# 获取项目根目录：playground 的上一级
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.tools.base import Tool
+from src.tools.registry import ToolRegistry
+
 
 class ToolA(Tool):
     name="tool_a"
+    def execute(filename:str):
+        print(filename)
 
 class ToolB(Tool):
     name="tool_b"
+    def execute(filename:str, content:str):
+        print(filename+content)
 
 a=ToolA()
 b=ToolB()
