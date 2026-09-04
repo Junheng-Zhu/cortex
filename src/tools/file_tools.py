@@ -36,39 +36,37 @@ def read_note(filename: str) -> str:
         content = f.read()
     return content
 
-# 工具注册表（供 Agent 调用）
-TOOL_REGISTRY = {
-    "list_notes": {
-        "func": list_notes,
-        "description": "列出笔记文件夹中的所有笔记文件名称。无需任何参数。",
-        "parameters": {"type": "object", "properties": {}},
-    },
-    "read_note": {
-        "func": read_note,
-        "description": "读取指定笔记文件的完整内容。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "filename": {
-                    "type": "string",
-                    "description": "笔记文件的名称，例如 'python.md'",
-                }
-            },
-            "required": ["filename"],
-        },
-    },
-}
+# # 工具注册表（供 Agent 调用）
+# TOOL_REGISTRY = {
+#     "list_notes": {
+#         "func": list_notes,
+#         "description": "列出笔记文件夹中的所有笔记文件名称。无需任何参数。",
+#         "parameters": {"type": "object", "properties": {}},
+#     },
+#     "read_note": {
+#         "func": read_note,
+#         "description": "读取指定笔记文件的完整内容。",
+#         "parameters": {
+#             "type": "object",
+#             "properties": {
+#                 "filename": {
+#                     "type": "string",
+#                     "description": "笔记文件的名称，例如 'python.md'",
+#                 }
+#             },
+#             "required": ["filename"],
+#         },
+#     },
+# }
 
 class ReadNoteTool(Tool):
     name = "read_note"
     description = "读取 notes 目录下指定文件的内容。"
     input_model = ReadNoteInput
-# Q1:input_model怎么指向一个类，而不是实例化成对象
-    def execute(self, filename: str)->str:
-        validated=ReadNoteInput(filename=filename)
-        # Q: 这里filename=filename正确吗
-        content=read_note(validated.filename)
-        return content
+    def execute(self, input)->str:
+
+        return read_note(input.filename)
+
     
 
 
