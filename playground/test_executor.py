@@ -45,30 +45,9 @@ filename
 
 # ③ 错误 Tool
 #    "xxx" + {...}
-result=executor.execute("read",{"filename": "python.md"})
-print(result)
-""" (venv) PS D:\pyproject> & d:\pyproject\cortex\venv\Scripts\python.exe d:/pyproject/cortex/playground/test_executor.py
-Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_executor.py", line 48, in <module>
-    result=executor.execute("read",{"filename": "python.md"})
-  File "d:\pyproject\cortex\src\tools\executor.py", line 16, in execute
-    validated_input=tool.input_model(**arguments)
-UnboundLocalError: local variable 'tool' referenced before assignment """
-
-
-""" Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_executor.py", line 48, in <module>
-    result=executor.execute("read",{"filename": "python.md"})
-  File "d:\pyproject\cortex\src\tools\executor.py", line 13, in execute
-    validated_input=tool.input_model(**arguments)
-AttributeError: 'str' object has no attribute 'input_model' """
-
-""" Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_executor.py", line 37, in <module>
-    result=executor.execute("read",{"filename": "python.md"})
-  File "d:\pyproject\cortex\src\tools\executor.py", line 13, in execute
-    validated_input=tool.input_model(**arguments)
-AttributeError: 'NoneType' object has no attribute 'input_model' """
+""" result=executor.execute("read",{"filename": "python.md"})
+print(result) """
+""" 错误：找不到工具read """
 
 
 # ④ 文件不存在

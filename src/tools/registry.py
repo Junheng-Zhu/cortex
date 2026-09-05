@@ -1,4 +1,5 @@
 from .base import Tool
+from .exceptions import ToolNotFoundError
 
 
 class ToolRegistry:
@@ -17,6 +18,6 @@ class ToolRegistry:
         tool=self._tools.get(name)
 
         if tool==None:
-            raise Exception
+            raise ToolNotFoundError
 
         return tool
