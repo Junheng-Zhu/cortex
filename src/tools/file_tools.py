@@ -5,7 +5,7 @@ from .base import Tool
 from .schemas import ReadNoteInput
 from pathlib import Path
 from .exceptions import *
-from .permission import permission
+from .permission import Permission
 
 
 # 设置笔记目录（项目根目录下的 notes 文件夹）
@@ -40,7 +40,7 @@ def read_note(filename: str) -> str:
 
     # 安全检查：防止通过 ../ 读取其他目录
     if not filep.is_relative_to(NOTES_DIR):
-        raise ToolAccessPermissionError("读取其他路径", "read_note", filep.resolve())
+        raise ToolSandboxError("读取其他路径", "read_note", filep.resolve())
 
     if not filep.exists():
         raise ToolFileNotFoundError("文件不存在","read_note",filepath)
@@ -80,7 +80,7 @@ class ReadNoteTool(Tool):
     name = "read_note"
     description = "读取 notes 目录下指定文件的内容。"
     input_model = ReadNoteInput
-    permission = permission.READ
+    permission = Permission.READ
 
     def execute(self, input) -> str:
 

@@ -19,8 +19,8 @@ registry.register(read_note_tool)
 
 # ① 正常 Tool
 #    "read_note" + {"filename": "python.md"}
-""" result=executor.execute("read_note",{"filename": "python.md"})
-print(result) """
+result=executor.execute("read_note",{"filename": "python.md"})
+print(result)
 
 # ② 缺参数
 #    "read_note" + {}
@@ -41,8 +41,8 @@ filename
 
 # ③ 错误 Tool
 #    "xxx" + {...}
-result = executor.execute("read", {"filename": "python.md"})
-print(result)
+""" result = executor.execute("read", {"filename": "python.md"})
+print(result) """
 
 """ 错误：找不到工具read """
 

@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import Any
-from .permission import permission
+from .permission import Permission
 
 
 class Tool(ABC):
     name: str
     description: str
     input_model: object
-    permission: permission
+    permission: Permission
 
     @abstractmethod
     def execute(self, **kwargs) -> Any:
