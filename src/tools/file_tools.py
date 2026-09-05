@@ -5,12 +5,13 @@ from .base import Tool
 from .schemas import ReadNoteInput
 from pathlib import Path
 from .exceptions import *
+from .permission import permission
+
 
 # 设置笔记目录（项目根目录下的 notes 文件夹）
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 NOTES_DIR = BASE_DIR / "notes"
-#我以为这里拼接str后，是一个str类型
 
 
 
@@ -39,39 +40,16 @@ def read_note(filename: str) -> str:
 
     # 安全检查：防止通过 ../ 读取其他目录
     if not filep.is_relative_to(NOTES_DIR):
-        raise ToolAccessPermissionError("读取其他路径", read_note, filep.resolve())
+        raise ToolAccessPermissionError("读取其他路径", "read_note", filep.resolve())
 
     if not filep.exists():
-        raise ToolFileNotFoundError("文件不存在",read_note,filepath)
+        raise ToolFileNotFoundError("文件不存在","read_note",filepath)
 
 
     content = filep.read_text(encoding="utf-8")
     return content
 
-""" 
-# 设置笔记目录（项目根目录下的 notes 文件夹）
-NOTES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "notes"
-)
-旧方法
-def read_note(filename: str) -> str:
-    
-    # 读取 notes 目录下指定文件的内容。
-    # 参数 filename: 文件名（如 "python.md"）
-    
-    filepath = os.path.join(NOTES_DIR, filename)
-    # 安全检查：防止通过 ../ 读取其他目录
-    if not os.path.abspath(filepath).startswith(os.path.abspath(NOTES_DIR)):
-        return "错误：不允许访问该路径。"
 
-    if not os.path.exists(filepath):
-        return f"错误：找不到文件 {filename}"
-
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
-    return content
-        
-"""
 
 
 # # 工具注册表（供 Agent 调用）
@@ -102,7 +80,7 @@ class ReadNoteTool(Tool):
     name = "read_note"
     description = "读取 notes 目录下指定文件的内容。"
     input_model = ReadNoteInput
-    permission = "READ"
+    permission = permission.READ
 
     def execute(self, input) -> str:
 
