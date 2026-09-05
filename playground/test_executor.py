@@ -45,8 +45,9 @@ filename
 
 # ③ 错误 Tool
 #    "xxx" + {...}
-""" result=executor.execute("read",{"filename": "python.md"})
-print(result) """
+result=executor.execute("read",{"filename": "python.md"})
+print(result)
+""" <bound method ToolNotFoundError.__str__ of ToolNotFoundError('工具未找到')> """
 """ 错误：找不到工具read """
 
 

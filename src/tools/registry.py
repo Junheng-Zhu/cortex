@@ -18,6 +18,6 @@ class ToolRegistry:
         tool=self._tools.get(name)
 
         if tool==None:
-            raise ToolNotFoundError
+            raise ToolNotFoundError("工具未找到",name)
 
         return tool
