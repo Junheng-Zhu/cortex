@@ -11,7 +11,7 @@ class ToolNotFoundError(ToolError):
         # 如果某个地方只把它当普通 Exception 使用，也不会丢掉 message
 
     def __str__(self):
-        return f"工具名称 '{self.tool_name}' 失败原因: {self.message}"
+        return f"工具名称 {self.tool_name} 失败原因: {self.message}"
 
 
 class ToolAccessPermissionError(ToolError):
@@ -24,9 +24,9 @@ class ToolAccessPermissionError(ToolError):
         # 如果某个地方只把它当普通 Exception 使用，也不会丢掉 message
 
     def __str__(self):
-        return f"工具名称 '{self.tool_name}' 失败原因: {self.message}"
+        return f"工具名称 {self.tool_name} 访问地址：'{self.file_dir}'失败原因: {self.message}"
 
-FileNotFoundError
+# FileNotFoundError
 class ToolFileNotFoundError(ToolError):
 
     def __init__(self, message, tool_name, file_dir):
@@ -37,7 +37,7 @@ class ToolFileNotFoundError(ToolError):
         # 如果某个地方只把它当普通 Exception 使用，也不会丢掉 message
 
     def __str__(self):
-        return f"工具名称 '{self.tool_name}' 文件地址：'{self.file_dir}'失败原因: {self.message}"
+        return f"工具名称 {self.tool_name} 文件地址：'{self.file_dir}'失败原因: {self.message}"
 
 
 class ToolValidationError(ToolError):

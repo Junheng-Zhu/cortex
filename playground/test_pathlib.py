@@ -33,17 +33,19 @@ try : print(read_note("../../secret.txt"))
 except ToolAccessPermissionError as e:
     print(str(e))
 
-""" 工具名称 '<function read_note at 0x00000201B6D72320>' 文件地址：'D:\pyproject\cortex\notes\not_exist.md'失败原因: 文件不存在
-Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_pathlib.py", line 26, in <module>
-    try : print(read_note("../secret.txt"))
-  File "d:\pyproject\cortex\src\tools\file_tools.py", line 42, in read_note
-    raise ToolFileNotFoundError("文件不存在",read_note,filepath)
-src.tools.exceptions.ToolFileNotFoundError: 工具名称 '<function read_note at 0x00000201B6D72320>' 文件地址：'D:\pyproject\cortex\notes\..\secret.txt'失败原因: 文件不存在 """
+""" 
+工具名称 <function read_note at 0x000001A8A10E2320> 文件地址：'D:\pyproject\cortex\notes\not_exist.md'失败原因: 文件不存在
+工具名称 <function read_note at 0x000001A8A10E2320> 访问地址：'D:\pyproject\cortex\secret.txt'失败原因: 读取其他路径
+工具名称 <function read_note at 0x000001A8A10E2320> 访问地址：'D:\pyproject\secret.txt'失败原因: 读取其他路径
+ """
 
 # ⑤ 绝对路径
 # read_note("")
-
-
-
+try : print(read_note("D:\\pyproject\\cortex\\README.md"))
+except ToolAccessPermissionError as e:
+    print(str(e))
+try : print(read_note("D:\\pyproject\\cortex\\notes\\python.md"))
+except ToolAccessPermissionError as e:
+    print(str(e))
+# 为什么这里也会读取成功，我前面不是还好拼接上文件夹的地址吗
 
