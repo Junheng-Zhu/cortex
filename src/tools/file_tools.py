@@ -3,11 +3,14 @@ import glob
 from typing import List, Dict, Any
 from .base import Tool
 from .schemas import ReadNoteInput
+from pathlib import Path
+from .exceptions import *
 
 # 设置笔记目录（项目根目录下的 notes 文件夹）
-NOTES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "notes"
-)
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+NOTES_DIR = BASE_DIR / "notes"
+NOTES_P = Path(NOTES_DIR)
 
 
 def list_notes() -> List[str]:
@@ -28,16 +31,18 @@ def read_note(filename: str) -> str:
     读取 notes 目录下指定文件的内容。
     参数 filename: 文件名（如 "python.md"）
     """
-    filepath = os.path.join(NOTES_DIR, filename)
+    filepath = NOTES_DIR / filename
+    filep = Path(filepath)
+
     # 安全检查：防止通过 ../ 读取其他目录
-    if not os.path.abspath(filepath).startswith(os.path.abspath(NOTES_DIR)):
-        return "错误：不允许访问该路径。"
+    if not filep.is_relative_to(NOTES_P):
+        raise ToolAccessPermissionError("读取其他路径", read_note, filep.resolve())
 
-    if not os.path.exists(filepath):
-        return f"错误：找不到文件 {filename}"
+    if not filep.exists():
+        raise ToolFileNotFoundError("文件不存在",read_note,filepath)
 
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+
+    content = filep.read_text(encoding="utf-8")
     return content
 
 
