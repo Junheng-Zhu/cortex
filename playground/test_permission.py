@@ -10,9 +10,11 @@ from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 from src.tools.file_tools import ReadNoteTool
 from src.tools.exceptions import *
+from src.tools.permission import Permission
 
-allowed_permissions_1 = {"READ"}
-allowed_permissions_2 = {"WRITE"}
+
+allowed_permissions_1 = {Permission.READ}
+allowed_permissions_2 = {Permission.WRITE}
 
 registry = ToolRegistry()
 read_note_tool = ReadNoteTool()
@@ -23,8 +25,7 @@ registry.register(read_note_tool)
 
 # ① 正常 Tool
 #    "read_note" + {"filename": "python.md"}
-if executor.permission_check("read_note"):
-    result = executor.execute("read_note", {"filename": "python.md"})
-    print(result)
-else:
-    raise ToolPermissionError("没有访问该工具的权限","read_note")
+try: result=executor.execute("read_note",{"filename": "python.md"})
+except ToolPermissionError as e:
+    print(str(e))
+
