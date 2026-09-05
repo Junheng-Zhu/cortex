@@ -2,9 +2,7 @@ import sys
 import os
 
 # 获取项目根目录：playground 的上一级
-PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
-)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -12,13 +10,11 @@ from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 from src.tools.file_tools import ReadNoteTool
 
-registry=ToolRegistry()
-read_note_tool=ReadNoteTool()
-executor=ToolExecutor(registry)
+registry = ToolRegistry()
+read_note_tool = ReadNoteTool()
+executor = ToolExecutor(registry)
 
 registry.register(read_note_tool)
-
-
 
 
 # ① 正常 Tool
@@ -45,9 +41,9 @@ filename
 
 # ③ 错误 Tool
 #    "xxx" + {...}
-result=executor.execute("read",{"filename": "python.md"})
+result = executor.execute("read", {"filename": "python.md"})
 print(result)
-""" <bound method ToolNotFoundError.__str__ of ToolNotFoundError('工具未找到')> """
+
 """ 错误：找不到工具read """
 
 

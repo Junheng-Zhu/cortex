@@ -15,9 +15,9 @@ class ToolRegistry:
         return self._tools.keys()
 
     def get(self, name: str) -> Tool:
-        tool=self._tools.get(name)
+        tool = self._tools.get(name)
 
-        if tool==None:
-            raise ToolNotFoundError("工具未找到",name)
+        if tool == None:
+            raise ToolNotFoundError("工具未找到", name)
 
         return tool
