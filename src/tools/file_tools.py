@@ -6,6 +6,8 @@ from .schemas import *
 from pathlib import Path
 from .exceptions import *
 from .permission import Permission
+from time import sleep
+
 
 
 # 设置笔记目录（项目根目录下的 notes 文件夹）
@@ -54,28 +56,9 @@ def delete_note(filename: str) -> bool:
 
     pass
 
-# # 工具注册表（供 Agent 调用）
-# TOOL_REGISTRY = {
-#     "list_notes": {
-#         "func": list_notes,
-#         "description": "列出笔记文件夹中的所有笔记文件名称。无需任何参数。",
-#         "parameters": {"type": "object", "properties": {}},
-#     },
-#     "read_note": {
-#         "func": read_note,
-#         "description": "读取指定笔记文件的完整内容。",
-#         "parameters": {
-#             "type": "object",
-#             "properties": {
-#                 "filename": {
-#                     "type": "string",
-#                     "description": "笔记文件的名称，例如 'python.md'",
-#                 }
-#             },
-#             "required": ["filename"],
-#         },
-#     },
-# }
+def slow_tool():
+    sleep(10)
+
 
 
 class ReadNoteTool(Tool):
@@ -97,3 +80,15 @@ class DeleteNoteTool(Tool):
     def execute(self,input)->bool:
 
         pass
+
+
+class SlowTool(Tool):
+    name = "slow_tool"
+    description = "删除 notes 目录下指定文件。"
+    input_model = ""
+    permission = Permission.READ
+
+    def execute(self):
+        slow_tool()
+
+        

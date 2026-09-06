@@ -52,8 +52,18 @@ class ToolFileNotFoundError(ToolError):
 
 
 class ToolValidationError(ToolError):
-    pass
+    def __init__(self, message, tool_name):
+            self.message = message
+            self.tool_name = tool_name
+            super().__init__(message)
+            # 如果某个地方只把它当普通 Exception 使用，也不会丢掉 message
+    
+    def __str__(self):
+        return f"工具名称 {self.tool_name} '失败原因: {self.message}"
 
 
 class ToolExecutionError(ToolError):
+    pass
+
+class ToolTimeoutError(ToolError):
     pass
