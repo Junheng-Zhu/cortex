@@ -2,7 +2,7 @@ import os
 import glob
 from typing import List, Dict, Any
 from .base import Tool
-from .schemas import ReadNoteInput
+from .schemas import *
 from pathlib import Path
 from .exceptions import *
 from .permission import Permission
@@ -50,7 +50,9 @@ def read_note(filename: str) -> str:
     return content
 
 
+def delete_note(filename: str) -> bool:
 
+    pass
 
 # # 工具注册表（供 Agent 调用）
 # TOOL_REGISTRY = {
@@ -85,3 +87,13 @@ class ReadNoteTool(Tool):
     def execute(self, input) -> str:
 
         return read_note(input.filename)
+
+class DeleteNoteTool(Tool):
+    name = "delete_note"
+    description = "删除 notes 目录下指定文件。"
+    input_model = DeleteNoteInput
+    permission = Permission.DELETE
+
+    def execute(self,input)->bool:
+
+        pass

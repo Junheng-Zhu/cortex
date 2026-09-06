@@ -8,13 +8,13 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
-from src.tools.file_tools import ReadNoteTool
+from src.tools.file_tools import *
 from src.tools.exceptions import *
 from src.tools.permission import Permission
 
 
 allowed_permissions_1 = {Permission.READ}
-allowed_permissions_2 = {Permission.WRITE}
+allowed_permissions_2 = {Permission.WRITE,Permission.READ}
 
 registry = ToolRegistry()
 read_note_tool = ReadNoteTool()
@@ -22,10 +22,21 @@ read_note_tool = ReadNoteTool()
 executor = ToolExecutor(allowed_permissions_2,registry)
 registry.register(read_note_tool)
 
+delete_note_tool=DeleteNoteTool()
+registry.register(delete_note_tool)
+
+
+
 
 # ① 正常 Tool
 #    "read_note" + {"filename": "python.md"}
 try: result=executor.execute("read_note",{"filename": "python.md"})
+except ToolPermissionError as e:
+    print(str(e))
+print(result)
+
+
+try: result=executor.execute("delete_note",{"filename": "python.md"})
 except ToolPermissionError as e:
     print(str(e))
 
