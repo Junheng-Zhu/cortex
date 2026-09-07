@@ -2,6 +2,7 @@ from .registry import ToolRegistry
 from typing import Any
 from .exceptions import *
 from .base import Tool
+from .result import ToolResult
 import time
 import concurrent.futures
 
@@ -9,10 +10,10 @@ import concurrent.futures
 
 class ToolExecutor:
 
-    def __init__(self, allowed_permissions: set, registry: ToolRegistry,timeout):
+    def __init__(self, allowed_permissions: set, registry: ToolRegistry):
         self.registry = registry
         self.allowed_permissions = allowed_permissions
-        self.timeout=5
+        self.timeout=1
         self.max_retries=1
 
     # def execute(self,tool_name,**kwargs):
@@ -30,8 +31,17 @@ class ToolExecutor:
     def _execute_once(self,tool:Tool,validated_input)->Any:
         return tool.execute(validated_input)
 
-    def _should_retry(self)->bool:
-        pass
+    def _should_retry(self,error,tool:Tool,attempts:int)->bool:
+        if tool.retryable ==False:
+            return False
+        elif error ==ToolTimeoutError:
+            return True
+        elif attempts >=tool.max_retries:
+            return False
+        else:
+            return False
+    
+            
 
     def _execute_with_retry(self,tool:Tool,validated_input):
         attempt=0
@@ -58,11 +68,12 @@ class ToolExecutor:
                 return result
             
 
-    def execute(self, tool_name:str, arguments) -> Any:
+    def execute(self, tool_name:str, arguments) -> ToolResult:
         tool = self._get_tool(tool_name)
         if not self._check_permission(tool):
             raise ToolPermissionError("没有访问该工具的权限", tool_name)
         try:validated_input = self._validate(tool,arguments)
         except:
             raise ToolValidationError("输入不符合工具要求",tool_name)
-        return self._execute_with_retry(tool,validated_input)
+        result_data= self._execute_with_retry(tool,validated_input)
+        return ToolResult(tool_name, 0,self.timeout, True, None, result_data)

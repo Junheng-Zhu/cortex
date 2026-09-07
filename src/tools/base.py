@@ -8,6 +8,9 @@ class Tool(ABC):
     description: str
     input_model: object
     permission: Permission
+    retryable: bool
+    max_retries:int
+    timeout:int
 
     @abstractmethod
     def execute(self, **kwargs) -> Any:
