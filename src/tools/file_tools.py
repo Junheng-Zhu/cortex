@@ -56,7 +56,7 @@ def delete_note(filename: str) -> bool:
 
     pass
 
-def slow_tool():
+def slow_tool(a:int):
     sleep(10)
 
 
@@ -66,6 +66,9 @@ class ReadNoteTool(Tool):
     description = "读取 notes 目录下指定文件的内容。"
     input_model = ReadNoteInput
     permission = Permission.READ
+    timeout = 5
+    max_retries = 3
+    retryable = True
 
     def execute(self, input) -> str:
 
@@ -76,6 +79,9 @@ class DeleteNoteTool(Tool):
     description = "删除 notes 目录下指定文件。"
     input_model = DeleteNoteInput
     permission = Permission.DELETE
+    timeout = 5
+    max_retries = 0
+    retryable = False
 
     def execute(self,input)->bool:
 
@@ -87,8 +93,11 @@ class SlowTool(Tool):
     description = "删除 notes 目录下指定文件。"
     input_model = ""
     permission = Permission.READ
+    timeout = 5
+    max_retries = 3
+    retryable = True
 
-    def execute(self):
-        slow_tool()
+    def execute(self,input):
+        slow_tool(input)
 
         

@@ -4,7 +4,8 @@ from .exceptions import *
 from .base import Tool
 from .result import ToolResult
 import time
-import concurrent.futures
+from pydantic import ValidationError
+import multiprocessing
 
 
 
@@ -13,8 +14,9 @@ class ToolExecutor:
     def __init__(self, allowed_permissions: set, registry: ToolRegistry):
         self.registry = registry
         self.allowed_permissions = allowed_permissions
-        self.timeout=1
-        self.max_retries=1
+        self.timeout=10
+        self.max_retries=5
+        # 全局的 timeout 和 max_retries
 
     # def execute(self,tool_name,**kwargs):
 
@@ -34,47 +36,82 @@ class ToolExecutor:
     def _should_retry(self,error,tool:Tool,attempts:int)->bool:
         if tool.retryable ==False:
             return False
-        elif error ==ToolTimeoutError:
+        elif isinstance(error, ToolTimeoutError):
             return True
         elif attempts >=tool.max_retries:
             return False
         else:
             return False
+
+    def _worker_with_queur(self,tool:Tool,validated_input,queue):
+        try:
+            result = tool.execute(validated_input)
+            tool_result=ToolResult(tool_name=tool.name,
+                                  attempts=0,
+                                  duration_ms=0,
+                                  success=True,
+                                  error="",
+                                  data=result)
+
+
+
+            queue.put(tool_result)
+        except ToolError as e:
+            tool_result=ToolResult(tool_name=tool.name,
+                                   attempts=0,
+                                   duration_ms=0,
+                                    success=False,
+                                    error=str(e),
+                                    data=None)
+            queue.put(tool_result)
+
     
-            
 
     def _execute_with_retry(self,tool:Tool,validated_input)->ToolResult:
         attempts=0
+        tool_retries=min(tool.max_retries,self.max_retries)
+        tool_timeout=min(tool.timeout,self.timeout)
+        tool_queue = multiprocessing.Queue()
 
-        for i in range(self.max_retries+1):
-            attempt+=1
+        for i in range(tool_retries):
+            attempts+=1
             try:
-                with concurrent.futures.ThreadPoolExecutor() as time_executor:
-                    future = time_executor.submit(self._execute_once,tool,validated_input)
-                    try:
-                        result = future.result(self.timeout)
-                    except concurrent.futures.TimeoutError:
-                        raise ToolTimeoutError
-                
+
+                p=multiprocessing.Process(target=self._worker_with_queur,args=(tool,validated_input,tool_queue))
+                p.start()
+                p.join(tool_timeout)
+
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
+                    raise ToolTimeoutError
+               
 
             except ToolError as e:
                 if self._should_retry(e,tool,attempts):
                     continue
                 else:
                     return ToolResult(tool_name=tool.name,
-                                      attempts=attempt,
+                                      attempts=attempts,
                                       duration_ms=0,
                                       success=False,
                                       error=str(e),
                                       data=None)
                 
             else:
-                return ToolResult(tool_name=tool.name,
-                                  attempts=attempt,
-                                  duration_ms=0,
-                                  success=True,
-                                  error="",
-                                  data=result)
+                if not tool_queue.empty():
+                    tool_result=tool_queue.get()
+                    tool_result.attempts=attempts
+                    return tool_result
+                elif attempts >= tool_retries:
+                    return ToolResult(tool_name=tool.name,
+                                      attempts=attempts,
+                                      duration_ms=0,
+                                      success=False,
+                                      error="Tool execution failed after maximum retries",
+                                      data=None)
+
+            
             
             
 
@@ -90,12 +127,12 @@ class ToolExecutor:
                               data=None)
         # 这里直接不要引起异常，返回一个 ToolResult 对象，表示验证失败？
         try:validated_input = self._validate(tool,arguments)
-        except :
+        except ValidationError as e:
             return ToolResult(tool_name=tool.name,
                               attempts=0,
                               duration_ms=0,
                               success=False,
-                              error="Input validation failed",
+                              error=str(e),
                               data=None)
         
         tool_result= self._execute_with_retry(tool,validated_input)
