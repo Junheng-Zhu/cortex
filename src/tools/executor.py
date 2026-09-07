@@ -43,8 +43,8 @@ class ToolExecutor:
     
             
 
-    def _execute_with_retry(self,tool:Tool,validated_input):
-        attempt=0
+    def _execute_with_retry(self,tool:Tool,validated_input)->ToolResult:
+        attempts=0
 
         for i in range(self.max_retries+1):
             attempt+=1
@@ -57,23 +57,48 @@ class ToolExecutor:
                         raise ToolTimeoutError
                 
 
-
-            except ToolPermissionError:
-                break
-            except ToolFileNotFoundError:
-                break
-            except ToolTimeoutError:
-                continue
+            except ToolError as e:
+                if self._should_retry(e,tool,attempts):
+                    continue
+                else:
+                    return ToolResult(tool_name=tool.name,
+                                      attempts=attempt,
+                                      duration_ms=0,
+                                      success=False,
+                                      error=str(e),
+                                      data=None)
+                
             else:
-                return result
+                return ToolResult(tool_name=tool.name,
+                                  attempts=attempt,
+                                  duration_ms=0,
+                                  success=True,
+                                  error="",
+                                  data=result)
+            
             
 
     def execute(self, tool_name:str, arguments) -> ToolResult:
+        start = time.perf_counter()
         tool = self._get_tool(tool_name)
         if not self._check_permission(tool):
-            raise ToolPermissionError("没有访问该工具的权限", tool_name)
+            return ToolResult(tool_name=tool.name,
+                              attempts=0,
+                              duration_ms=0,
+                              success=False,
+                              error="Permission denied",
+                              data=None)
+        # 这里直接不要引起异常，返回一个 ToolResult 对象，表示验证失败？
         try:validated_input = self._validate(tool,arguments)
-        except:
-            raise ToolValidationError("输入不符合工具要求",tool_name)
-        result_data= self._execute_with_retry(tool,validated_input)
-        return ToolResult(tool_name, 0,self.timeout, True, None, result_data)
+        except :
+            return ToolResult(tool_name=tool.name,
+                              attempts=0,
+                              duration_ms=0,
+                              success=False,
+                              error="Input validation failed",
+                              data=None)
+        
+        tool_result= self._execute_with_retry(tool,validated_input)
+        end = time.perf_counter()
+        tool_result.duration_ms = int((end - start) * 1000)
+        return tool_result
