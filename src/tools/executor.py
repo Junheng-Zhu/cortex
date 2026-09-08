@@ -33,7 +33,9 @@ class ToolExecutor:
     def _execute_once(self, tool: Tool, validated_input) -> Any:
         return tool.execute(validated_input)
 
-    def _should_retry(self, outcome: ExecutionOutcome, tool: Tool, attempts: int) -> bool:
+    def _should_retry(
+        self, outcome: ExecutionOutcome, tool: Tool, attempts: int
+    ) -> bool:
         if tool.retryable == False:
             return False
         elif attempts >= min(tool.max_retries, self.max_retries) + 1:
@@ -67,60 +69,49 @@ class ToolExecutor:
         for i in range(tool_retries + 1):
             attempts += 1
             tool_queue = multiprocessing.Queue()
+            p = multiprocessing.Process(
+                target=self._worker_with_queur,
+                args=(tool, validated_input, tool_queue, attempts),
+            )
+            p.start()
+            p.join(tool_timeout)
+            outcome = tool_queue.get()
 
-            try:
-
-                p = multiprocessing.Process(
-                    target=self._worker_with_queur,
-                    args=(tool, validated_input, tool_queue, attempts),
-                )
-                p.start()
-                p.join(tool_timeout)
-
-                if p.is_alive():
-                    p.terminate()               
-                    raise ToolTimeoutError
-
-            except Exception as e:
-                """ if self._should_retry(type(e).__name__, tool, attempts):
-                    continue """
+            if p.is_alive():
+                p.terminate()
                 outcome = ExecutionOutcome(
-                    success=False, error=e, attempts=attempts, data=None
+                    success=False,
+                    error=ToolTimeoutError("Tool timed out"),
+                    attempts=attempts,
+                    data=None,
                 )
+            p.join()
+            tool_queue.close()
+            tool_queue.join_thread()
 
+            if outcome.success:
+                return ToolResult(
+                    tool_name=tool.name,
+                    attempts=attempts,
+                    duration_ms=0,
+                    success=True,
+                    error_type=None,
+                    error_message=None,
+                    data=outcome.data,
+                )
             else:
-                if not tool_queue.empty():
-                    outcome = tool_queue.get()
-
-       
-            finally:
-                p.join()
-                tool_queue.close()
-                tool_queue.join_thread()
-
-                if outcome.success:
+                if self._should_retry(outcome, tool, attempts):
+                    continue
+                else:
                     return ToolResult(
                         tool_name=tool.name,
                         attempts=attempts,
                         duration_ms=0,
-                        success=True,
-                        error_type=None,
-                        error_message=None,
-                        data=outcome.data,
+                        success=False,
+                        error_type=outcome.error_type,
+                        error_message=outcome.error_message,
+                        data=None,
                     )
-                else:
-                    if self._should_retry(outcome, tool, attempts):
-                        continue
-                    else:
-                        return ToolResult(
-                            tool_name=tool.name,
-                            attempts=attempts,
-                            duration_ms=0,
-                            success=False,
-                            error_type=outcome.error_type,
-                            error_message=outcome.error_message,
-                            data=None,
-                        )                    
 
     def execute(self, tool_name: str, arguments) -> ToolResult:
         start = time.perf_counter()
@@ -131,10 +122,10 @@ class ToolExecutor:
                 attempts=0,
                 duration_ms=0,
                 success=False,
-                error="Permission denied",
+                error_type="ToolPermissionError",
+                error_message="Permission denied",
                 data=None,
             )
-        # 这里直接不要引起异常，返回一个 ToolResult 对象，表示验证失败？
         try:
             validated_input = self._validate(tool, arguments)
         except ValidationError as e:
@@ -143,7 +134,8 @@ class ToolExecutor:
                 attempts=0,
                 duration_ms=0,
                 success=False,
-                error=str(e),
+                error_type="ToolValidationError",
+                error_message=str(e),
                 data=None,
             )
 
