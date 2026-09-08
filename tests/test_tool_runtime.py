@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import pytest
+# 我再cortex执行pip install pytest,但是这里提示无法解析导入“pytest”，要在test文件夹重新执行吗，但是这个文件用虚拟环境是可以运行的
 
 from pydantic import BaseModel
 
@@ -144,3 +145,5 @@ def test_unknown_tool():
 
     with pytest.raises(Exception):
         executor.execute("not_exist", {})
+
+# pytest tests/test_tool_runtime.py -v

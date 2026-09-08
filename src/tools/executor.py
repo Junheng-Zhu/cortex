@@ -33,12 +33,12 @@ class ToolExecutor:
     def _execute_once(self, tool: Tool, validated_input) -> Any:
         return tool.execute(validated_input)
 
-    def _should_retry(self, error_type: str, tool: Tool, attempts: int) -> bool:
+    def _should_retry(self, outcome: ExecutionOutcome, tool: Tool, attempts: int) -> bool:
         if tool.retryable == False:
             return False
         elif attempts >= min(tool.max_retries, self.max_retries) + 1:
             return False
-        elif error_type == "ToolTimeoutError":
+        elif outcome.error_type == "ToolTimeoutError":
             return True
 
         else:
@@ -78,45 +78,49 @@ class ToolExecutor:
                 p.join(tool_timeout)
 
                 if p.is_alive():
-                    p.terminate()
-                    p.join()
+                    p.terminate()               
                     raise ToolTimeoutError
 
             except Exception as e:
-                if self._should_retry(type(e).__name__, tool, attempts):
-                    continue
-                else:
-                    return ToolResult(
-                        tool_name=tool.name,
-                        attempts=attempts,
-                        duration_ms=0,
-                        success=False,
-                        error=str(e),
-                        data=None,
-                    )
+                """ if self._should_retry(type(e).__name__, tool, attempts):
+                    continue """
+                outcome = ExecutionOutcome(
+                    success=False, error=e, attempts=attempts, data=None
+                )
 
             else:
                 if not tool_queue.empty():
-                    process_outcome = tool_queue.get()
+                    outcome = tool_queue.get()
 
-                    return ToolResult(
-                        tool_name=tool.name,
-                        attempts=process_outcome.attempts,
-                        duration_ms=0,
-                        success=process_outcome.success,
-                        error=process_outcome.error,
-                        data=process_outcome.data,
-                    )
+       
+            finally:
+                p.join()
+                tool_queue.close()
+                tool_queue.join_thread()
 
-                elif attempts >= tool_retries:
+                if outcome.success:
                     return ToolResult(
                         tool_name=tool.name,
                         attempts=attempts,
                         duration_ms=0,
-                        success=False,
-                        error="Tool execution failed after maximum retries",
-                        data=None,
+                        success=True,
+                        error_type=None,
+                        error_message=None,
+                        data=outcome.data,
                     )
+                else:
+                    if self._should_retry(outcome, tool, attempts):
+                        continue
+                    else:
+                        return ToolResult(
+                            tool_name=tool.name,
+                            attempts=attempts,
+                            duration_ms=0,
+                            success=False,
+                            error_type=outcome.error_type,
+                            error_message=outcome.error_message,
+                            data=None,
+                        )                    
 
     def execute(self, tool_name: str, arguments) -> ToolResult:
         start = time.perf_counter()
