@@ -66,4 +66,14 @@ class ToolExecutionError(ToolError):
     pass
 
 class ToolTimeoutError(ToolError):
-    pass
+    message = "工具执行超时"
+
+    def __init__(self, tool_name,message=None):
+        self.tool_name = tool_name
+        if message is not None:
+            self.message = message
+        super().__init__(self.message)
+        # 如果某个地方只把它当普通 Exception 使用，也不会丢掉 message
+
+    def __str__(self):
+        return f"工具名称 {self.tool_name} '失败原因: {self.message}"
