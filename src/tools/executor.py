@@ -30,13 +30,24 @@ class ToolExecutor:
     def _validate(self, tool: Tool, arguments) -> Any:
         return tool.input_model(**arguments)
 
+    def to_schema(self,tool_name:str):
+        tool=self._get_tool(tool_name)
+        schema={'name':tool.name,'description':tool.description}
+        merged=schema |tool.input_model.model_json_schema()
+        print(merged)
+
+
+        
+
+
+
     def _execute_once(self, tool: Tool, validated_input) -> Any:
         return tool.execute(validated_input)
 
     def _should_retry(
         self, outcome: ExecutionOutcome, tool: Tool, attempts: int
     ) -> bool:
-        if tool.retryable == False:
+        if not tool.retryable:
             return False
         elif attempts >= min(tool.max_retries, self.max_retries) + 1:
             return False
@@ -75,7 +86,6 @@ class ToolExecutor:
             )
             p.start()
             p.join(tool_timeout)
-            outcome = tool_queue.get()
 
             if p.is_alive():
                 p.terminate()
@@ -85,6 +95,8 @@ class ToolExecutor:
                     attempts=attempts,
                     data=None,
                 )
+            else:
+                outcome = tool_queue.get()
             p.join()
             tool_queue.close()
             tool_queue.join_thread()

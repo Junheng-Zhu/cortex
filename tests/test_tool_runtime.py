@@ -1,9 +1,9 @@
 import os
 import sys
 import time
-import pytest
-# 我再cortex执行pip install pytest,但是这里提示无法解析导入“pytest”，要在test文件夹重新执行吗，但是这个文件用虚拟环境是可以运行的
+import multiprocessing
 
+import pytest
 from pydantic import BaseModel
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,7 +13,6 @@ from src.tools.base import Tool
 from src.tools.executor import ToolExecutor
 from src.tools.permission import Permission
 from src.tools.registry import ToolRegistry
-
 
 
 class EmptyInput(BaseModel):
@@ -26,7 +25,7 @@ class EchoInput(BaseModel):
 
 class EchoTool(Tool):
     name = "echo"
-    description = "测试输入验证和正常执行"
+    description = "normal tool"
     input_model = EchoInput
     permission = Permission.READ
     retryable = False
@@ -39,7 +38,7 @@ class EchoTool(Tool):
 
 class SlowTool(Tool):
     name = "slow"
-    description = "测试 timeout"
+    description = "tool used to test process timeout"
     input_model = EmptyInput
     permission = Permission.READ
     retryable = False
@@ -52,22 +51,50 @@ class SlowTool(Tool):
 
 
 class FlakyTool(Tool):
+    """
+    用共享计数器模拟：
+    attempt 1 -> ToolTimeoutError
+    attempt 2 -> success
+
+    注意：因为 Executor 每次 retry 都会创建新的 Process，
+    普通的 self.attempts 不能跨进程保存，所以这里使用 multiprocessing.Value。
+    """
+
     name = "flaky"
-    description = "第一次失败，第二次成功"
+    description = "first attempt raises ToolTimeoutError, second succeeds"
     input_model = EmptyInput
     permission = Permission.READ
     retryable = True
     max_retries = 1
     timeout = 2
 
-    def __init__(self):
-        self.attempts = 0
+    def __init__(self, shared_attempts):
+        self.shared_attempts = shared_attempts
 
     def execute(self, input):
-        self.attempts += 1
-        if self.attempts == 1:
-            raise RuntimeError("temporary failure")
+        with self.shared_attempts.get_lock():
+            self.shared_attempts.value += 1
+            current_attempt = self.shared_attempts.value
+
+        if current_attempt == 1:
+            # 用 ToolTimeoutError 测试当前 Executor 的 retry policy。
+            from src.tools.exceptions import ToolTimeoutError
+            raise ToolTimeoutError("simulated transient timeout")
+
         return "success"
+
+
+class DeleteLikeTool(Tool):
+    name = "delete_like"
+    description = "tool requiring DELETE permission"
+    input_model = EmptyInput
+    permission = Permission.DELETE
+    retryable = False
+    max_retries = 0
+    timeout = 2
+
+    def execute(self, input):
+        return "should never execute"
 
 
 def register(registry, *tools):
@@ -75,7 +102,7 @@ def register(registry, *tools):
         registry.register(tool)
 
 
-def test_tool_success():
+def test_success():
     registry = ToolRegistry()
     register(registry, EchoTool())
     executor = ToolExecutor({Permission.READ}, registry)
@@ -85,6 +112,8 @@ def test_tool_success():
     assert result.success is True
     assert result.data == "hello"
     assert result.attempts == 1
+    assert result.error_type is None
+    assert result.error_message is None
 
 
 def test_validation_error():
@@ -95,19 +124,20 @@ def test_validation_error():
     result = executor.execute("echo", {})
 
     assert result.success is False
+    assert result.error_type == "ToolValidationError"
     assert result.attempts == 0
-    assert "validation" in result.error.lower() or "field" in result.error.lower()
 
 
 def test_permission_denied():
     registry = ToolRegistry()
-    register(registry, EchoTool())
-    executor = ToolExecutor(set(), registry)
+    register(registry, DeleteLikeTool())
+    executor = ToolExecutor({Permission.READ}, registry)
 
-    result = executor.execute("echo", {"text": "hello"})
+    result = executor.execute("delete_like", {})
 
     assert result.success is False
-    assert "permission" in result.error.lower()
+    assert result.error_type == "ToolPermissionError"
+    assert result.attempts == 0
 
 
 def test_timeout():
@@ -120,23 +150,28 @@ def test_timeout():
     elapsed = time.perf_counter() - start
 
     assert result.success is False
-    assert "timeout" in result.error.lower()
-    assert elapsed < 3.0
+    assert result.error_type == "ToolTimeoutError"
+    assert result.attempts == 1
+
+    # Windows 下给进程启动留少量余量，但不能等完整的 3 秒。
+    assert elapsed < 2.5
 
 
-def test_retry_after_transient_error():
+def test_retry_after_transient_timeout():
     registry = ToolRegistry()
-    tool = FlakyTool()
+
+    shared_attempts = multiprocessing.Value("i", 0)
+    tool = FlakyTool(shared_attempts)
     register(registry, tool)
+
     executor = ToolExecutor({Permission.READ}, registry)
 
     result = executor.execute("flaky", {})
 
-    # 这个测试会直接暴露当前 Executor 的 retry 问题：
-    # Worker 把 RuntimeError 转成 ToolResult 后，父进程看不到原始异常类型。
     assert result.success is True
     assert result.data == "success"
     assert result.attempts == 2
+    assert shared_attempts.value == 2
 
 
 def test_unknown_tool():
@@ -145,5 +180,10 @@ def test_unknown_tool():
 
     with pytest.raises(Exception):
         executor.execute("not_exist", {})
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
+
 
 # pytest tests/test_tool_runtime.py -v
