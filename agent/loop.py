@@ -44,10 +44,3 @@ class Agent:
                 state.final_answer = response["content"]
                 return state.final_answer
 
-""" PLAN: ['读取目标文件', '分析文件内容', '生成总结']
-Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_agent_loop.py", line 38, in <module>
-    answer = agent.run("读取python.md")
-  File "d:\pyproject\cortex\agent\loop.py", line 25, in run
-    response = self.llm.chat(state.messages, self.executor.schemas())
-AttributeError: 'ToolExecutor' object has no attribute 'schemas' """
