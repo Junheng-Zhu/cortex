@@ -15,3 +15,6 @@ class ToolResult():
         self.error_message=error_message
         self.data=data
 
+    def __str__(self):
+        return f"ToolResult(tool_name={self.tool_name}, attempts={self.attempts}, duration_ms={self.duration_ms}, success={self.success}, error_type={self.error_type}, error_message={self.error_message}, data={self.data})"
+
