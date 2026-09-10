@@ -8,20 +8,29 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
-from src.tools.file_tools import ReadNoteTool
+from src.tools.file_tools import *
 from src.tools.permission import Permission
 
 
 registry = ToolRegistry()
 read_note_tool = ReadNoteTool()
-allowed_permissions = {Permission.READ}
+delete_note_tool = DeleteNoteTool()
+slow_tool = SlowTool()
+
+allowed_permissions = {Permission.READ, Permission.WRITE, Permission.DELETE}
 
 executor = ToolExecutor(allowed_permissions,registry)
 
 registry.register(read_note_tool)
+registry.register(delete_note_tool)
+registry.register(slow_tool)
 
-executor.to_schema("read_note")
+list1=executor.list_tool_schemas()
+print(list1)
 
 """ {'name': 'read_note',
  'description': '读取 notes 目录下指定文件的内容。', 
- 'properties': {'filename': {'title': 'Filename', 'type': 'string'}}, 'required': ['filename'], 'title': 'ReadNoteInput', 'type': 'object'} """
+ 'properties': {'filename': {'title': 'Filename', 'type': 'string'}}, 
+                'required': ['filename'], 
+                'title': 'ReadNoteInput', 
+                'type': 'object'} """

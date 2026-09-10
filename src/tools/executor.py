@@ -30,15 +30,28 @@ class ToolExecutor:
     def _validate(self, tool: Tool, arguments) -> Any:
         return tool.input_model(**arguments)
 
-    def to_schema(self,tool_name:str):
-        tool=self._get_tool(tool_name)
-        schema={'name':tool.name,'description':tool.description}
-        merged=schema |tool.input_model.model_json_schema()
-        print(merged)
+    
+    def to_schema(self, tool_name: str) -> dict:
+        tool = self._get_tool(tool_name)
 
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.input_model.model_json_schema()
+            }
+        }
+    
+    
+    def list_tool_schemas(self) -> list:
+        schemas = []
 
-        
+        for tool_name in self.registry.list_tools():
+            schema = self.to_schema(tool_name)
+            schemas.append(schema)
 
+        return schemas
 
 
     def _execute_once(self, tool: Tool, validated_input) -> Any:
