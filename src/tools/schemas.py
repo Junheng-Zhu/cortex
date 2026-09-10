@@ -1,14 +1,15 @@
 from pydantic import BaseModel
 
 
-
 class ReadNoteInput(BaseModel):
-    
-    filename:str
+
+    filename: str
+
 
 class DeleteNoteInput(BaseModel):
-    
-    filename:str
+
+    filename: str
 
 
-
+class SlowToolInput(BaseModel):
+    seconds: int

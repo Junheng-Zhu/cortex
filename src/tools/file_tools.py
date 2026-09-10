@@ -57,7 +57,7 @@ def delete_note(filename: str) -> bool:
     pass
 
 def slow_tool(a:int):
-    sleep(10)
+    sleep(a)
 
 
 
@@ -90,14 +90,14 @@ class DeleteNoteTool(Tool):
 
 class SlowTool(Tool):
     name = "slow_tool"
-    description = "删除 notes 目录下指定文件。"
-    input_model = ""
+    description = "执行一个耗时操作。"
+    input_model = SlowToolInput
     permission = Permission.READ
     timeout = 5
     max_retries = 3
     retryable = True
 
     def execute(self,input):
-        slow_tool(input)
+        slow_tool(input.seconds)
 
         
