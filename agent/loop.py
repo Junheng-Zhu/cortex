@@ -22,7 +22,10 @@ class Agent:
         while True:
             # ReAct Thought
             thought = self.react.think(state)
-            response = self.llm.chat(state.messages, self.executor.schemas())
+            response = self.llm.chat(
+                state.messages,
+                self.executor.list_tool_schemas(),
+            )
             ################################
             # Function Calling
             ################################
@@ -43,4 +46,3 @@ class Agent:
             else:
                 state.final_answer = response["content"]
                 return state.final_answer
-
