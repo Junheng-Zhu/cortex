@@ -1,9 +1,20 @@
 class Reflector:
 
     def reflect(self, state):
-        if not state.observations:
+
+        result = state.last_tool_result
+
+        if result is None:
             return False
-        observation = state.observations[-1]
-        if observation:
+
+        # Tool 成功：
+        # 把 Observation 给模型，让模型决定任务是否完成
+        if result.success:
             return True
+
+        # Tool 失败：
+        # 只要还有运行预算，也允许模型尝试恢复
+        if state.step_count < state.max_steps:
+            return True
+
         return False
