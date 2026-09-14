@@ -25,3 +25,21 @@ class Agent:
 
         if state.phase == AgentPhase.FINAL:
                     return state.final_tool_result
+
+    def execute(self, state: AgentState):
+        tool_name = state.pending_tool_name
+        tool_args = state.pending_tool_arguments
+        result = self.executor.execute(tool_name, tool_args)
+        state.last_tool_result = result
+        state.phase = AgentPhase.OBSERVE
+
+    def observe(self, state: AgentState):
+        observation = state.last_tool_result
+        state.observations.append(observation)
+        state.messages.append(
+            {
+                "role": "assistant",
+                "content": f"Observation: {observation}"
+            }
+        )
+        
