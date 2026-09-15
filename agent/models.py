@@ -3,7 +3,7 @@ import json
 
 @dataclass
 class ToolCall:
-
+    tool_call_id: str=""
     name: str
     arguments: dict
 
@@ -12,7 +12,7 @@ class LLMResponse:
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
 
-    def __init__(self,response:dict):
+    def from_dict(self, response: dict):
         self.content = response.get("content", "")
 
         for item in response.get("tool_calls", []):

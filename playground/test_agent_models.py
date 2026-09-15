@@ -26,14 +26,23 @@ fake_response = {
 ]
 }
 
-llm_response = LLMResponse(fake_response)
+llm_response = LLMResponse()
+llm_response.from_dict(fake_response)
 print(llm_response.tool_calls)
 for item in llm_response.tool_calls:
     print(f"Tool Name: {item.name}, Arguments: {item.arguments}")
 
 """ Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_agent_models.py", line 29, in <module>
-    llm_response = LLMResponse(fake_response)
-  File "d:\pyproject\cortex\agent\models.py", line 23, in __init__
-    self.tool_calls.append(tool_call)
-AttributeError: 'LLMResponse' object has no attribute 'tool_calls'. Did you mean: 'is_tool_call'? """
+  File "d:\pyproject\cortex\playground\test_agent_models.py", line 14, in <module>
+    from agent.models import LLMResponse, ToolCall
+  File "d:\pyproject\cortex\agent\models.py", line 5, in <module>
+    class ToolCall:
+  File "D:\python 3.10.10\lib\dataclasses.py", line 1184, in dataclass
+    return wrap(cls)
+  File "D:\python 3.10.10\lib\dataclasses.py", line 1175, in wrap
+    return _process_class(cls, init, repr, eq, order, unsafe_hash,
+  File "D:\python 3.10.10\lib\dataclasses.py", line 1024, in _process_class
+    _init_fn(all_init_fields,
+  File "D:\python 3.10.10\lib\dataclasses.py", line 544, in _init_fn
+    raise TypeError(f'non-default argument {f.name!r} '
+TypeError: non-default argument 'name' follows default argument """
