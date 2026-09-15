@@ -3,8 +3,7 @@ from dataclasses import dataclass, field
 @dataclass
 class LLMResponse:
     content: str
-    tool_name: str | None = None
-    tool_arguments: dict | None = None
+    is_tool_call:dict| None = None
 
     def __init__(self,response:dict):
         self.content = response.get("content", "")

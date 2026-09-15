@@ -9,6 +9,12 @@ class Agent:
 
     def run(self,query:str):
         state = AgentState()
+        state.messages.append(
+                    {
+                        "role": "user",
+                        "content": query
+                    }
+                )
 
         
         while state.phase != AgentPhase.FINAL and state.step_count < state.max_steps:
@@ -24,12 +30,7 @@ class Agent:
                     return state.final_response
 
     def decide(self, state: AgentState, query:str):
-        state.messages.append(
-            {
-                "role": "user",
-                "content": query
-            }
-        )
+        
         response = self.llm.generate_response(state.messages)
         state.messages.append(
             {
