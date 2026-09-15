@@ -19,7 +19,7 @@ class AgentState:
     observations: list[Any] = field(default_factory=list)
     step_count: int = 0
     max_steps: int = 6
-    pending_tool_calls: list[ToolCall] | None = None
+    pending_tool_calls: list[ToolCall] = field(default_factory=list)
     last_tool_result:ToolResult | None = None
     final_response: str | None = None
 
