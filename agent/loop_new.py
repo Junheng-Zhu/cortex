@@ -40,8 +40,7 @@ class Agent:
         )
         llm_response = LLMResponse(response)
         if llm_response.is_tool_call():
-            state.pending_tool_name = llm_response.tool_name
-            state.pending_tool_arguments = llm_response.tool_arguments
+            state.pending_tool_calls = llm_response.tool_calls
             state.phase = AgentPhase.EXECUTE
         else:
             state.final_response = llm_response.content
@@ -50,20 +49,21 @@ class Agent:
          
 
     def execute(self, state: AgentState):
-        tool_name = state.pending_tool_name
-        tool_args = state.pending_tool_arguments
-        result = self.executor.execute(tool_name, tool_args)
-        state.last_tool_result = result
+        if len(state.pending_tool_calls) > 0:
+            for tool_call in state.pending_tool_calls:
+                tool_name = tool_call.name
+                tool_args = tool_call.arguments
+                result = self.executor.execute(tool_name, tool_args)
+                self.state.messages.append(
+                    {
+                        "role": "tool",
+                        "content": f"Executed {tool_name} with result: {result}"
+                    }
+                )
+
         state.phase = AgentPhase.OBSERVE
 
     def observe(self, state: AgentState):
-        observation = state.last_tool_result
-        state.observations.append(observation)
-        state.messages.append(
-            {
-                "role": "tool",
-                "content": f"Observation: {observation}"
-            }
-        )
+        
         state.phase = AgentPhase.DECIDE
         

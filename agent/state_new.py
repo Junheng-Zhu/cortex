@@ -2,6 +2,7 @@ from dataclasses import dataclass,field
 from enum import Enum
 from typing import Any
 from src.tools.result import ToolResult
+from .models import ToolCall
 
 class AgentPhase(Enum):
     "DECIDE"="DECIDE"
@@ -18,7 +19,7 @@ class AgentState:
     observations: list[Any] = field(default_factory=list)
     step_count: int = 0
     max_steps: int = 6
-    pending_tool_call: dict | None = None
+    pending_tool_calls: list[ToolCall] | None = None
     last_tool_result:ToolResult | None = None
     final_response: str | None = None
 

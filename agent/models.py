@@ -1,14 +1,21 @@
 from dataclasses import dataclass, field
 
 @dataclass
+class ToolCall:
+    tool_call_id: str
+    name: str
+    arguments: dict
+
+@dataclass
 class LLMResponse:
     content: str
-    is_tool_call:dict| None = None
+    tool_calls: list[ToolCall] | None = None
 
     def __init__(self,response:dict):
         self.content = response.get("content", "")
-        self.tool_name = response.get("name")
-        self.tool_arguments = response.get("arguments")
+        self.tool_calls = response.get("tool_calls", None)
+        
 
     def is_tool_call(self) -> bool:
-        return self.tool_name is not None
+        return len(self.tool_calls) > 0 
+
