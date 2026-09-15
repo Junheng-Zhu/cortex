@@ -32,17 +32,6 @@ print(llm_response.tool_calls)
 for item in llm_response.tool_calls:
     print(f"Tool Name: {item.name}, Arguments: {item.arguments}")
 
-""" Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_agent_models.py", line 14, in <module>
-    from agent.models import LLMResponse, ToolCall
-  File "d:\pyproject\cortex\agent\models.py", line 5, in <module>
-    class ToolCall:
-  File "D:\python 3.10.10\lib\dataclasses.py", line 1184, in dataclass
-    return wrap(cls)
-  File "D:\python 3.10.10\lib\dataclasses.py", line 1175, in wrap
-    return _process_class(cls, init, repr, eq, order, unsafe_hash,
-  File "D:\python 3.10.10\lib\dataclasses.py", line 1024, in _process_class
-    _init_fn(all_init_fields,
-  File "D:\python 3.10.10\lib\dataclasses.py", line 544, in _init_fn
-    raise TypeError(f'non-default argument {f.name!r} '
-TypeError: non-default argument 'name' follows default argument """
+""" [ToolCall(name='read_note', arguments={'filename': 'python.md'}, tool_call_id=None), ToolCall(name='delete_note', arguments={'filename': 'python.md'}, tool_call_id=None)]
+Tool Name: read_note, Arguments: {'filename': 'python.md'}
+Tool Name: delete_note, Arguments: {'filename': 'python.md'} """

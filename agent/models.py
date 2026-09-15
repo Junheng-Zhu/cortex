@@ -1,15 +1,17 @@
 from dataclasses import dataclass, field
 import json
+from typing import Optional
 
 @dataclass
 class ToolCall:
-    tool_call_id: str=""
     name: str
     arguments: dict
+    tool_call_id:str | None = None
+    
 
 @dataclass
 class LLMResponse:
-    content: str
+    content: Optional[str] = None
     tool_calls: list[ToolCall] = field(default_factory=list)
 
     def from_dict(self, response: dict):
