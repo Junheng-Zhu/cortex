@@ -38,7 +38,8 @@ class Agent:
                 "content": response
             }
         )
-        llm_response = LLMResponse(response)
+        llm_response = LLMResponse()
+        llm_response.from_dict(response)
         if llm_response.is_tool_call():
             state.pending_tool_calls = llm_response.tool_calls
             state.phase = AgentPhase.EXECUTE
@@ -54,7 +55,7 @@ class Agent:
                 tool_name = tool_call.name
                 tool_args = tool_call.arguments
                 result = self.executor.execute(tool_name, tool_args)
-                self.state.messages.append(
+                state.messages.append(
                     {
                         "role": "tool",
                         "content": f"Executed {tool_name} with result: {result}"
