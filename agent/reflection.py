@@ -1,20 +1,30 @@
+from runtime.observation import Observation
+from runtime.reflection import ReflectionResult
+
+
 class Reflector:
+    def reflect(self, observation: Observation) -> ReflectionResult:
+        """Reflect on a tool observation without making another LLM call."""
+        # Accept an AgentState during the migration from the old reflector API.
+        if not isinstance(observation, Observation):
+            observations = getattr(observation, "observations", [])
+            if not observations:
+                return ReflectionResult(
+                    status="FAILED",
+                    summary="No observation is available to reflect on.",
+                    next_hint=None,
+                )
+            observation = observations[-1]
 
-    def reflect(self, state):
+        if observation.success:
+            return ReflectionResult(
+                status="CONTINUE",
+                summary="Tool execution succeeded.",
+                next_hint="Use the observation to decide the next step.",
+            )
 
-        result = state.last_tool_result
-
-        if result is None:
-            return False
-
-        # Tool 成功：
-        # 把 Observation 给模型，让模型决定任务是否完成
-        if result.success:
-            return True
-
-        # Tool 失败：
-        # 只要还有运行预算，也允许模型尝试恢复
-        if state.step_count < state.max_steps:
-            return True
-
-        return False
+        return ReflectionResult(
+            status="FAILED",
+            summary=observation.error or "Tool execution failed.",
+            next_hint=None,
+        )

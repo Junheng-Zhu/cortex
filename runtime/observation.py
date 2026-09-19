@@ -1,13 +1,12 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class Observation:
+    """The normalized result of executing one action."""
 
     action_id: str
     success: bool
-    output: any
-    error: str | None
-    latency: float
-    token_cost: float
-    tool_name: str | None
+    output: Any = None
+    error: str | None = None

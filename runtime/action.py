@@ -1,37 +1,13 @@
-from dataclasses import dataclass
-
-from enum import Enum
+from dataclasses import dataclass, field
 from typing import Any
-
-
-
-class ActionType(Enum):
-    Think = "Think"
-    Search = "Search"
-    Read = "Read"
-    Edit = "Edit"
-    Run = "Run"
-    Verify = "Verify"
-    Respond = "Respond"
-
-class ActionStatus:
-
-    pass
+from uuid import uuid4
 
 
 @dataclass
 class Action:
+    """A tool invocation chosen by the agent."""
 
-    id: str
-
-    type: ActionType
-
-    tool_name: str | None
-
-    arguments: dict
-
-    reasoning: str | None
-
-    status: ActionStatus
-
-    timestamp: float
+    tool_name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    action_id: str = field(default_factory=lambda: str(uuid4()))
+    status: str = "PENDING"

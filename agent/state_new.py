@@ -1,35 +1,33 @@
-from dataclasses import dataclass,field
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from src.tools.result import ToolResult
-from .models import ToolCall
 
-class AgentPhase(Enum):
-    "DECIDE"="DECIDE"
-    "EXECUTE"="EXECUTE"
-    "OBSERVE"="OBSERVE"
-    "FINAL"="FINAL"
+from runtime.action import Action
+from runtime.observation import Observation
+from runtime.reflection import ReflectionResult
+
+
+class AgentPhase(str, Enum):
+    DECIDE = "DECIDE"
+    ACT = "ACT"
+    OBSERVE = "OBSERVE"
+    REFLECT = "REFLECT"
+    FINAL = "FINAL"
+
+
+Phase = AgentPhase
+
 
 @dataclass
 class AgentState:
-    messages: list[dict] = field(default_factory=list)
     phase: AgentPhase = AgentPhase.DECIDE
-    # 当前任务
-    goal: str | None = None
-    # action历史
-    actions: list[dict] = field(default_factory=list)
-    # observation历史
-    observations: list[Any] = field(default_factory=list)
-    # 思考结果
-    reflections: list[str] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    actions: list[Action] = field(default_factory=list)
+    observations: list[Observation] = field(default_factory=list)
+    reflections: list[ReflectionResult] = field(default_factory=list)
+    pending_actions: list[Action] = field(default_factory=list)
+    last_tool_result: Any = None
+    final_answer: str | None = None
     step_count: int = 0
-    max_steps: int = 6
-    pending_tool_calls: list[ToolCall] = field(default_factory=list)
-    last_tool_result:ToolResult | None = None
-    final_response: str | None = None
-    # token预算
-    token_budget:int
-    # trace
-    execution_trace: list[ToolResult]=field(default_factory=list)
-    #上下文
-    context:list[dict]=field(default_factort=list)
+    max_steps: int = 10
+    token_budget: int = 4096
