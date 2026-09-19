@@ -8,40 +8,27 @@ from agent.fake_llm import FakeLLM
 from src.tools.executor import ToolExecutor
 
 from src.tools.registry import ToolRegistry
-from src.tools.file_tools import *
+from src.tools.file_tools import DeleteNoteTool, ReadNoteTool, SlowTool
 from src.tools.permission import Permission
 
-registry = ToolRegistry()
 
-read_note_tool = ReadNoteTool()
-delete_note_tool = DeleteNoteTool()
-slow_tool = SlowTool()
+def main():
+    registry = ToolRegistry()
+    registry.register(ReadNoteTool())
+    registry.register(DeleteNoteTool())
+    registry.register(SlowTool())
 
-allowed_permissions = {
+    allowed_permissions = {
         Permission.READ,
         Permission.WRITE,
-        Permission.DELETE
+        Permission.DELETE,
     }
+    executor = ToolExecutor(allowed_permissions, registry)
 
-executor = ToolExecutor(
-        allowed_permissions,
-        registry
-    )
-
-registry.register(read_note_tool)
-registry.register(delete_note_tool)
-registry.register(slow_tool)
-
-
-
-agent = Agent(llm=FakeLLM(), executor=executor)
-answer = agent.run("读取python.md")
-print(answer)
-
-""" PLAN: ['读取目标文件', '分析文件内容', '生成总结']
-Traceback (most recent call last):
-  File "d:\pyproject\cortex\playground\test_agent_loop.py", line 38, in <module>
+    agent = Agent(llm=FakeLLM(), executor=executor)
     answer = agent.run("读取python.md")
-  File "d:\pyproject\cortex\agent\loop.py", line 25, in run
-    response = self.llm.chat(state.messages, self.executor.schemas())
-AttributeError: 'ToolExecutor' object has no attribute 'schemas' """
+    print(answer)
+
+
+if __name__ == "__main__":
+    main()
