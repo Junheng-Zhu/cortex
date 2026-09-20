@@ -1,29 +1,58 @@
+import json
 import os
-import time
-from typing import Optional, List, Dict, Any
-from openai import OpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import dotenv
+from typing import Any
 
-print(">>> 正在加载 models.py...")
+import dotenv
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from agent.models import LLMResponse, ToolCall
+
+
 dotenv.load_dotenv()
 
-class LLMClient:
-    
+
+RETRYABLE_OPENAI_ERRORS = (
+    APIConnectionError,
+    APITimeoutError,
+    RateLimitError,
+    InternalServerError,
+)
+
+
+class OpenAIResponsesClient:
+    """Stateless OpenAI Responses API client for the Cortex runtime."""
+
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        temperature: float = 0.7,
-    ):
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        max_output_tokens: int | None = None,
+        store: bool = True,
+        client: Any | None = None,
+    ) -> None:
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.model = model or os.getenv("MODEL_NAME", "gpt-4o-mini")
-        self.temperature = temperature
+        self.base_url = base_url or os.getenv(
+            "OPENAI_BASE_URL",
+            "https://api.openai.com/v1",
+        )
+        self.model = model or os.getenv("MODEL_NAME", "gpt-4.1-mini")
+        self.max_output_tokens = max_output_tokens
+        self.store = store
+
+        if client is not None:
+            self.client = client
+            return
 
         if not self.api_key:
-            raise ValueError("OpenAI API Key 未设置，请检查 .env 文件")
+            raise ValueError("OPENAI_API_KEY is not configured")
 
         self.client = OpenAI(
             api_key=self.api_key,
@@ -32,28 +61,77 @@ class LLMClient:
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(Exception),  # 实际应细化，但入门先全量重试
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type(RETRYABLE_OPENAI_ERRORS),
         reraise=True,
     )
-    def chat_completion(
+    def create_response(
         self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
-        model: Optional[str] = None,
-        **kwargs,
-    ) -> str:
-        """
-        发送对话，返回模型回复的文本。
-        """
-        try:
-            response = self.client.chat.completions.create(
-                model=model or self.model,
-                messages=messages,
-                temperature=temperature or self.temperature,
-                **kwargs,
+        input_items: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        previous_response_id: str | None = None,
+        instructions: str | None = None,
+    ) -> LLMResponse:
+        request: dict[str, Any] = {
+            "model": self.model,
+            # Copy the turn delta because AgentState clears its pending input
+            # after the request completes.
+            "input": list(input_items),
+            "store": self.store,
+        }
+
+        if previous_response_id is not None:
+            request["previous_response_id"] = previous_response_id
+        if instructions:
+            request["instructions"] = instructions
+        if self.max_output_tokens is not None:
+            request["max_output_tokens"] = self.max_output_tokens
+        if tools:
+            request.update(
+                {
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": False,
+                }
             )
-            return response.choices[0].message.content
-        except Exception as e:
-            # tenacity 会自动重试，但我们可以记录错误日志（这里先忽略）
-            raise e
+
+        response = self.client.responses.create(**request)
+        return self._parse_response(response)
+
+    @staticmethod
+    def _parse_response(response: Any) -> LLMResponse:
+        tool_calls: list[ToolCall] = []
+
+        for item in response.output:
+            if item.type != "function_call":
+                continue
+
+            try:
+                arguments = json.loads(item.arguments)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Model returned invalid JSON arguments for {item.name}: "
+                    f"{item.arguments}"
+                ) from exc
+
+            if not isinstance(arguments, dict):
+                raise ValueError(
+                    f"Model arguments for {item.name} must decode to an object"
+                )
+
+            tool_calls.append(
+                ToolCall(
+                    call_id=item.call_id,
+                    name=item.name,
+                    arguments=arguments,
+                )
+            )
+
+        return LLMResponse(
+            response_id=response.id,
+            content=response.output_text or "",
+            tool_calls=tool_calls,
+        )
+
+
+LLMClient = OpenAIResponsesClient

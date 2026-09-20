@@ -21,7 +21,8 @@ Phase = AgentPhase
 @dataclass
 class AgentState:
     phase: AgentPhase = AgentPhase.DECIDE
-    messages: list[dict[str, Any]] = field(default_factory=list)
+    response_input: list[dict[str, Any]] = field(default_factory=list)
+    previous_response_id: str | None = None
     actions: list[Action] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
     reflections: list[ReflectionResult] = field(default_factory=list)
