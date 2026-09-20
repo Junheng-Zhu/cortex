@@ -3,7 +3,7 @@ import os
 # 获取项目根目录：playground 的上一级
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
-from agent.loop import Agent
+from agent.loop_new import Agent
 from agent.fake_llm import FakeLLM
 from src.tools.executor import ToolExecutor
 

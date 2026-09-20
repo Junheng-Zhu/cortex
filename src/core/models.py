@@ -9,10 +9,7 @@ print(">>> 正在加载 models.py...")
 dotenv.load_dotenv()
 
 class LLMClient:
-    """
-    极简 LLM 网关，负责统一 API 调用，并内置重试机制。
-    参考 Waku 的 60 行适配器，但我们先只支持 OpenAI 接口。
-    """
+    
     def __init__(
         self,
         api_key: Optional[str] = None,

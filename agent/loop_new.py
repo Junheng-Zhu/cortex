@@ -3,12 +3,14 @@ from runtime.observation import Observation
 
 from .reflection import Reflector
 from .state_new import AgentPhase, AgentState
+from runtime.reflection import ReflectionResult
+from src.tools.executor import ToolExecutor
 
 
 class AgentLoop:
     """Agent state machine: DECIDE -> ACT -> OBSERVE -> REFLECT."""
 
-    def __init__(self, llm, executor, max_steps: int = 10):
+    def __init__(self, llm, executor: ToolExecutor, max_steps: int = 10):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         self.llm = llm
@@ -17,6 +19,7 @@ class AgentLoop:
         self.reflector = Reflector()
 
     def run(self, query: str) -> str | None:
+        
         state = AgentState(max_steps=self.max_steps)
         state.messages.append({"role": "user", "content": query})
 
@@ -71,9 +74,7 @@ class AgentLoop:
                 action.tool_name,
                 action.arguments,
             )
-            action.status = (
-                "SUCCEEDED" if state.last_tool_result.success else "FAILED"
-            )
+            action.status = "SUCCEEDED" if state.last_tool_result.success else "FAILED"
         except Exception as exc:
             action.status = "FAILED"
             state.last_tool_result = exc
