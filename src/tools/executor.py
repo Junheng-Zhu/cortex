@@ -4,6 +4,7 @@ from .exceptions import *
 from .base import Tool
 from .result import ToolResult
 from .execution_outcome import ExecutionOutcome
+from copy import deepcopy
 import time
 from pydantic import ValidationError
 import multiprocessing
@@ -31,16 +32,45 @@ class ToolExecutor:
         return tool.input_model(**arguments)
 
     
+    @staticmethod
+    def _strict_parameters_schema(schema: dict) -> dict:
+        """Validate and normalize Pydantic JSON Schema for strict functions."""
+        normalized = deepcopy(schema)
+
+        def visit(node: object) -> None:
+            if isinstance(node, dict):
+                if node.get("type") == "object" or "properties" in node:
+                    properties = node.get("properties", {})
+                    required = set(node.get("required", []))
+                    missing = set(properties) - required
+                    if missing:
+                        names = ", ".join(sorted(missing))
+                        raise ValueError(
+                            "Strict tool schemas require every property to be "
+                            f"required; missing: {names}"
+                        )
+                    node["additionalProperties"] = False
+
+                for value in node.values():
+                    visit(value)
+            elif isinstance(node, list):
+                for value in node:
+                    visit(value)
+
+        visit(normalized)
+        return normalized
+
     def to_schema(self, tool_name: str) -> dict:
         tool = self._get_tool(tool_name)
 
         return {
             "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.input_model.model_json_schema()
-            }
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": self._strict_parameters_schema(
+                tool.input_model.model_json_schema()
+            ),
+            "strict": True,
         }
     
     

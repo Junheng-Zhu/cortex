@@ -8,6 +8,7 @@ class Action:
     """A tool invocation chosen by the agent."""
 
     tool_name: str
+    tool_call_id: str
     arguments: dict[str, Any] = field(default_factory=dict)
     action_id: str = field(default_factory=lambda: str(uuid4()))
     status: str = "PENDING"
