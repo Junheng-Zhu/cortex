@@ -1,3 +1,12 @@
+import sys
+import os
+
+# 获取项目根目录：playground 的上一级
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+
+sys.path.insert(0, PROJECT_ROOT)
 from agent.loop_new import AgentLoop
 from src.core.loop import DEFAULT_INSTRUCTIONS, build_default_executor
 from src.core.models import OpenAIResponsesClient

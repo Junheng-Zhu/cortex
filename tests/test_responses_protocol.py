@@ -1,3 +1,13 @@
+import os
+import sys
+import time
+import multiprocessing
+
+import pytest
+from pydantic import BaseModel
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 from types import SimpleNamespace
 
 from agent.loop_new import AgentLoop
