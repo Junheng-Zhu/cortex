@@ -113,7 +113,13 @@ class LLMClient:
         tools: list[dict[str, Any]],
         previous_response_id: str | None = None,
     ) -> LLMResponse:
-        request = {"model": self.model, "input": input, "tools": tools}
+        response_tools = []
+        for tool in tools:
+            if "function" in tool:
+                response_tools.append({"type": tool["type"], **tool["function"]})
+            else:
+                response_tools.append(tool)
+        request = {"model": self.model, "input": input, "tools": response_tools}
         if previous_response_id is not None:
             request["previous_response_id"] = previous_response_id
         return parse_responses_response(self.client.responses.create(**request))

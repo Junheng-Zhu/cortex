@@ -1,52 +1,42 @@
 from agent.loop_new import AgentLoop
+from src.ops.tracer import RunRecorder
 from src.tools.executor import ToolExecutor
 from src.tools.file_tools import DeleteNoteTool, ReadNoteTool, SlowTool
 from src.tools.permission import Permission
 from src.tools.registry import ToolRegistry
 
-
-DEFAULT_INSTRUCTIONS = """You are Cortex, a note-management assistant.
-Use the supplied tools whenever the user asks you to inspect or modify current
-note files. Base your final answer on the function outputs you receive.
-"""
+from .models import LLMClient
 
 
-def build_default_executor() -> ToolExecutor:
+def build_agent(
+    client: LLMClient,
+    recorder: RunRecorder | None = None,
+    max_steps: int = 10,
+) -> AgentLoop:
+    """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
     registry.register(ReadNoteTool())
     registry.register(DeleteNoteTool())
     registry.register(SlowTool())
-
-    return ToolExecutor(
-        allowed_permissions={
-            Permission.READ,
-            Permission.WRITE,
-            Permission.DELETE,
-        },
-        registry=registry,
+    executor = ToolExecutor(
+        {Permission.READ, Permission.WRITE, Permission.DELETE},
+        registry,
     )
-
-
-def run_loop(client) -> None:
-    """Interactive CLI backed exclusively by the Responses API runtime."""
-    agent = AgentLoop(
+    return AgentLoop(
         llm=client,
-        executor=build_default_executor(),
-        max_steps=6,
-        instructions=DEFAULT_INSTRUCTIONS,
+        executor=executor,
+        max_steps=max_steps,
+        recorder=recorder,
     )
 
-    print("Cortex 已启动，输入 'exit' 退出。")
+
+def run_loop(client: LLMClient) -> None:
+    """Run the interactive shell using the current AgentLoop API."""
+    agent = build_agent(client)
+    print("Cortex 已启动（工具模式），输入 'exit' 退出。")
     while True:
-        query = input("\n你: ").strip()
-        if query.lower() in {"exit", "quit", "q"}:
+        user_input = input("\n你: ")
+        if user_input.strip().lower() in {"exit", "quit", "q"}:
             print("再见！")
             return
-
-        try:
-            answer = agent.run(query)
-        except Exception as exc:
-            print(f"Cortex 调用失败: {exc}")
-            continue
-
-        print(f"Cortex: {answer}")
+        print(f"Cortex: {agent.run(user_input)}")
