@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.tools.file_tools import list_notes, read_note
+from src.tools.exceptions import ToolFileNotFoundError, ToolSandboxError
 
 
 def check(condition, message):
@@ -22,11 +23,21 @@ def main():
     check("开会" in content, "calendar.txt contains 开会")
     check("ppt" in content.lower(), "calendar.txt contains ppt")
 
-    missing = read_note("__cortex_eval_missing__.txt")
-    check("找不到文件" in missing, "missing-file handling returns a controlled error")
+    try:
+        read_note("__cortex_eval_missing__.txt")
+    except ToolFileNotFoundError:
+        missing_is_controlled = True
+    else:
+        missing_is_controlled = False
+    check(missing_is_controlled, "missing-file handling raises a controlled error")
 
-    traversal = read_note("../.gitignore")
-    check("不允许访问该路径" in traversal, "path traversal is rejected")
+    try:
+        read_note("../.gitignore")
+    except ToolSandboxError:
+        traversal_is_rejected = True
+    else:
+        traversal_is_rejected = False
+    check(traversal_is_rejected, "path traversal is rejected")
 
     print("EVAL GATE: PASSED")
 
