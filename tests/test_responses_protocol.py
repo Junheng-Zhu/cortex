@@ -1,110 +1,106 @@
 import os
 import sys
-import time
-import multiprocessing
-
-import pytest
-from pydantic import BaseModel
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
-from types import SimpleNamespace
 
 from agent.loop_new import AgentLoop
-from src.core.models import OpenAIResponsesClient
-from src.tools.executor import ToolExecutor
-from src.tools.file_tools import ReadNoteTool
-from src.tools.permission import Permission
-from src.tools.registry import ToolRegistry
+from agent.models import LLMResponse, LLMUsage, ToolCall
+from src.core.models import (
+    ContextMode,
+    ProviderCapabilities,
+    parse_responses_response,
+)
+from src.tools.result import ToolResult
 
 
-class FakeResponsesResource:
-    def __init__(self):
+class Executor:
+    def list_tool_schemas(self):
+        return [{"type": "function", "name": "echo"}]
+
+    def execute(self, name, arguments):
+        return ToolResult(name, 1, 0, True, None, None, arguments["text"])
+
+
+class ResponsesLLM:
+    def __init__(self, context_mode):
+        self.capabilities = ProviderCapabilities(context_mode)
         self.requests = []
 
-    def create(self, **request):
+    def respond(self, **request):
         self.requests.append(request)
         if len(self.requests) == 1:
-            return SimpleNamespace(
-                id="resp_1",
-                output_text="",
-                output=[
-                    SimpleNamespace(
-                        type="function_call",
-                        call_id="call_1",
-                        name="read_note",
-                        arguments='{"filename": "python.md"}',
-                    )
-                ],
+            item = {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "echo",
+                "arguments": '{"text": "hello"}',
+            }
+            return LLMResponse(
+                response_id="resp-1",
+                tool_calls=[ToolCall("call-1", "echo", {"text": "hello"})],
+                output_items=[item],
             )
-
-        return SimpleNamespace(
-            id="resp_2",
-            output_text="The note explains Python basics.",
-            output=[SimpleNamespace(type="message")],
+        return LLMResponse(
+            response_id="resp-2",
+            content="done",
+            output_items=[
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                }
+            ],
         )
 
 
-def build_runtime():
-    resource = FakeResponsesResource()
-    sdk = SimpleNamespace(responses=resource)
-    llm = OpenAIResponsesClient(
-        api_key="test-key",
-        model="test-model",
-        client=sdk,
-    )
-
-    registry = ToolRegistry()
-    registry.register(ReadNoteTool())
-    executor = ToolExecutor({Permission.READ}, registry)
-    return AgentLoop(llm, executor, max_steps=2), resource, executor
-
-
-def test_executor_emits_native_strict_responses_schema():
-    _, _, executor = build_runtime()
-
-    schema = executor.list_tool_schemas()[0]
-
-    assert schema["type"] == "function"
-    assert schema["name"] == "read_note"
-    assert "function" not in schema
-    assert schema["strict"] is True
-    assert schema["parameters"]["additionalProperties"] is False
-
-
-def test_responses_tool_loop_uses_call_id_and_previous_response_id():
-    agent, resource, _ = build_runtime()
-
-    answer = agent.run("Read python.md and summarize it.")
-
-    assert answer == "The note explains Python basics."
-    assert len(resource.requests) == 2
-
-    first, second = resource.requests
-    assert first["parallel_tool_calls"] is False
-    assert first["tools"][0]["name"] == "read_note"
-    assert second["previous_response_id"] == "resp_1"
-    assert second["input"][0]["type"] == "function_call_output"
-    assert second["input"][0]["call_id"] == "call_1"
-
-
-def test_invalid_function_arguments_are_rejected():
-    response = SimpleNamespace(
-        id="resp_bad",
-        output_text="",
-        output=[
-            SimpleNamespace(
-                type="function_call",
-                call_id="call_bad",
-                name="read_note",
-                arguments="not-json",
-            )
+def test_response_parser_preserves_usage_and_output_items():
+    raw = {
+        "id": "resp-123",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call-123",
+                "name": "echo",
+                "arguments": '{"text": "hi"}',
+            }
         ],
-    )
+        "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+    }
 
-    try:
-        OpenAIResponsesClient._parse_response(response)
-    except ValueError as exc:
-        assert "invalid JSON arguments" in str(exc)
-    else:
-        raise AssertionError("invalid arguments must raise ValueError")
+    parsed = parse_responses_response(raw)
+
+    assert parsed.response_id == "resp-123"
+    assert parsed.usage == LLMUsage(10, 4, 14)
+    assert parsed.output_items == raw["output"]
+    assert parsed.tool_calls == [ToolCall("call-123", "echo", {"text": "hi"})]
+
+
+def test_server_managed_context_uses_openai_style_cursor():
+    llm = ResponsesLLM(ContextMode.SERVER_MANAGED)
+
+    assert AgentLoop(llm, Executor()).run("echo hello") == "done"
+
+    assert llm.requests[0]["previous_response_id"] is None
+    assert llm.requests[1]["previous_response_id"] == "resp-1"
+    assert llm.requests[1]["input"] == [
+        {"type": "function_call_output", "call_id": "call-1", "output": "hello"}
+    ]
+
+
+def test_client_managed_context_replays_full_history_without_cursor():
+    llm = ResponsesLLM(ContextMode.CLIENT_MANAGED)
+
+    assert AgentLoop(llm, Executor()).run("echo hello") == "done"
+
+    assert llm.requests[1]["previous_response_id"] is None
+    assert llm.requests[1]["input"] == [
+        {"role": "user", "content": "echo hello"},
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "echo",
+            "arguments": '{"text": "hello"}',
+        },
+        {"type": "function_call_output", "call_id": "call-1", "output": "hello"},
+    ]

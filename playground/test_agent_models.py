@@ -5,11 +5,7 @@ from runtime.reflection import ReflectionResult
 
 
 def test_runtime_models_and_action_id_relationship():
-    action = Action(
-        tool_name="read_note",
-        tool_call_id="call_1",
-        arguments={"filename": "python.md"},
-    )
+    action = Action(tool_name="read_note", arguments={"filename": "python.md"})
     observation = Observation(
         action_id=action.action_id,
         success=True,

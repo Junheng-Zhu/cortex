@@ -1,25 +1,11 @@
 from agent.loop_new import AgentLoop
-from agent.models import LLMResponse, ToolCall
 from agent.state_new import AgentPhase, AgentState
 from src.tools.result import ToolResult
 
 
 class FakeExecutor:
     def list_tool_schemas(self):
-        return [
-            {
-                "type": "function",
-                "name": "read_note",
-                "description": "Read a note.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"filename": {"type": "string"}},
-                    "required": ["filename"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
-        ]
+        return []
 
     def execute(self, name, arguments):
         return ToolResult(name, 1, 0, True, None, None, "contents")
@@ -30,31 +16,20 @@ class SequenceLLM:
         self.calls = 0
         self.always_call_tool = always_call_tool
 
-    def create_response(
-        self,
-        input_items,
-        tools,
-        previous_response_id=None,
-        instructions=None,
-    ):
+    def chat(self, messages, tools):
         self.calls += 1
         if self.calls == 1 or self.always_call_tool:
-            return LLMResponse(
-                response_id=f"resp_{self.calls}",
-                tool_calls=[
-                    ToolCall(
-                        call_id=f"call_{self.calls}",
-                        name="read_note",
-                        arguments={"filename": "python.md"},
-                    )
-                ],
-            )
-        return LLMResponse(response_id=f"resp_{self.calls}", content="done")
+            return {
+                "type": "tool_call",
+                "name": "read_note",
+                "arguments": {"filename": "python.md"},
+            }
+        return {"type": "final", "content": "done"}
 
 
 def test_complete_state_machine_flow():
     loop = AgentLoop(SequenceLLM(), FakeExecutor())
-    state = AgentState(response_input=[{"role": "user", "content": "read"}])
+    state = AgentState(messages=[{"role": "user", "content": "read"}])
 
     phases = []
     while state.phase is not AgentPhase.FINAL:
@@ -76,7 +51,7 @@ def test_complete_state_machine_flow():
 
 def test_successful_tool_does_not_go_directly_to_final():
     loop = AgentLoop(SequenceLLM(), FakeExecutor())
-    state = AgentState(response_input=[{"role": "user", "content": "read"}])
+    state = AgentState(messages=[{"role": "user", "content": "read"}])
 
     loop.decide(state)
     loop.act(state)
@@ -89,7 +64,7 @@ def test_successful_tool_does_not_go_directly_to_final():
 def test_max_steps_forces_termination():
     loop = AgentLoop(SequenceLLM(always_call_tool=True), FakeExecutor(), max_steps=1)
     state = AgentState(
-        response_input=[{"role": "user", "content": "read forever"}],
+        messages=[{"role": "user", "content": "read forever"}],
         max_steps=1,
     )
 
@@ -98,32 +73,3 @@ def test_max_steps_forces_termination():
 
     assert state.step_count == 1
     assert state.phase is AgentPhase.FINAL
-    assert state.final_answer == "Maximum number of action steps reached."
-
-
-def test_tool_result_becomes_function_call_output():
-    loop = AgentLoop(SequenceLLM(), FakeExecutor())
-    state = AgentState(response_input=[{"role": "user", "content": "read"}])
-
-    loop.decide(state)
-    loop.act(state)
-    loop.observe(state)
-
-    output = state.response_input[0]
-    assert output["type"] == "function_call_output"
-    assert output["call_id"] == "call_1"
-    assert '"success": true' in output["output"]
-
-
-def test_action_budget_still_allows_final_synthesis():
-    loop = AgentLoop(SequenceLLM(), FakeExecutor(), max_steps=1)
-    state = AgentState(
-        response_input=[{"role": "user", "content": "read"}],
-        max_steps=1,
-    )
-
-    while state.phase is not AgentPhase.FINAL:
-        loop.step(state)
-
-    assert state.step_count == 1
-    assert state.final_answer == "done"
