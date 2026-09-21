@@ -1,5 +1,10 @@
 
+from agent.models import LLMResponse, ToolCall
+
+
 class FakeLLM:
+    def __init__(self):
+        self.calls = 0
 
     def chat(self, messages, tools):
         last = messages[-1]
