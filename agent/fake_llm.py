@@ -3,7 +3,7 @@ class FakeLLM:
 
     def chat(self, messages, tools):
         last = messages[-1]
-        if "读取" in last["content"]:
+        if "读取" in last.get("content", ""):
             return {
                 "type": "tool_call",
                 "name": "read_note",
