@@ -10,6 +10,7 @@ from .schemas import ShellInput
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MAX_OUTPUT_CHARS = 10_000
+DEFAULT_TIMEOUT_SECONDS = 10
 BLOCKED_PROGRAMS = {
     "chmod",
     "chown",
@@ -31,12 +32,12 @@ class ShellTool(Tool):
     description = "在项目目录内执行单个安全命令，返回 exit_code、stdout 和 stderr。"
     input_model = ShellInput
     permission = Permission.EXECUTE
-    timeout = 30
+    timeout = DEFAULT_TIMEOUT_SECONDS
     max_retries = 0
     retryable = False
 
     def execute(self, input: ShellInput) -> dict[str, int | str | bool]:
-        cwd = (PROJECT_ROOT / input.cwd).resolve()
+        cwd = (PROJECT_ROOT / (input.cwd or ".")).resolve()
         if not cwd.is_relative_to(PROJECT_ROOT) or not cwd.is_dir():
             raise ValueError("cwd must be an existing directory inside the project")
 
@@ -55,7 +56,7 @@ class ShellTool(Tool):
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                timeout=input.timeout,
+                timeout=input.timeout or DEFAULT_TIMEOUT_SECONDS,
                 check=False,
             )
             return {

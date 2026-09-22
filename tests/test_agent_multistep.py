@@ -129,6 +129,15 @@ def test_shell_tool_restricts_cwd_and_dangerous_commands():
         tool.execute(ShellInput(command="pwd", cwd=str(Path("..").resolve())))
 
 
+def test_shell_requested_timeout_is_clamped_to_executor_limit():
+    agent = build_agent(object())
+    shell = agent.executor.registry.get("shell")
+    validated = agent.executor._validate(shell, {"command": "pwd", "timeout": 30})
+    limited = agent.executor._apply_runtime_limits(shell, validated)
+
+    assert limited.timeout == agent.executor.timeout == shell.timeout
+
+
 def test_runtime_registers_discovery_and_shell_tools():
     agent = build_agent(object())
     assert {"list_notes", "shell"}.issubset(agent.executor.registry.list_tools())
