@@ -30,9 +30,18 @@ def build_agent(
     )
 
 
-def run_loop(client: LLMClient) -> None:
-    """Run the interactive shell using the current AgentLoop API."""
-    agent = build_agent(client)
+def run_loop(
+    client: LLMClient,
+    recorder: RunRecorder | None = None,
+) -> None:
+    """Run the production shell with persistent tracing enabled.
+
+    Persistence is an entrypoint concern: callers such as tests can inject an
+    in-memory recorder, while the interactive runtime writes data for the
+    dashboard by default.
+    """
+    runtime_recorder = recorder if recorder is not None else RunRecorder(persist=True)
+    agent = build_agent(client, recorder=runtime_recorder)
     print("Cortex 已启动（工具模式），输入 'exit' 退出。")
     while True:
         user_input = input("\n你: ")
