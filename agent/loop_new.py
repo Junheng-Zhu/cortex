@@ -104,23 +104,31 @@ class AgentLoop:
             request_input = [*state.context_history, *state.pending_input]
             previous_response_id = None
 
+        request_tools = self.executor.list_tool_schemas()
         started = time.perf_counter()
         if hasattr(self.llm, "respond"):
             response = self.llm.respond(
                 input=request_input,
-                tools=self.executor.list_tool_schemas(),
+                tools=request_tools,
                 previous_response_id=previous_response_id,
             )
         else:
             response = self.llm.chat(
                 request_input,
-                self.executor.list_tool_schemas(),
+                request_tools,
             )
         normalized = self._normalize_response(response)
         duration_ms = (time.perf_counter() - started) * 1000
 
         self.recorder.record(
             "llm_call",
+            request={
+                "input": request_input,
+                "tools": request_tools,
+                "previous_response_id": previous_response_id,
+            },
+            output_items=normalized.output_items,
+            output_text=normalized.content,
             response_id=normalized.response_id,
             input_tokens=normalized.usage.input_tokens,
             output_tokens=normalized.usage.output_tokens,
@@ -221,7 +229,12 @@ class AgentLoop:
         action = state.pending_actions.pop(0)
         result = state.last_tool_result
         if isinstance(result, Exception):
-            observation = Observation(action.action_id, False, error=str(result))
+            observation = Observation(
+                action.action_id,
+                False,
+                error=str(result),
+                error_type=type(result).__name__,
+            )
         else:
             observation = Observation(
                 action_id=action.action_id,
@@ -232,6 +245,7 @@ class AgentLoop:
                     if result.success
                     else result.error_message or result.error_type
                 ),
+                error_type=None if result.success else result.error_type,
             )
 
         state.observations.append(observation)
@@ -252,19 +266,30 @@ class AgentLoop:
             output_preview=self.recorder.preview(observation.output),
             output_length=self.recorder.output_length(observation.output),
             error=observation.error,
+            error_type=observation.error_type,
         )
         state.phase = AgentPhase.REFLECT
 
     def reflect(self, state: AgentState) -> None:
         reflection = self.reflector.reflect(state.observations[-1])
         state.reflections.append(reflection)
-        if reflection.status == "FAILED":
+        self.recorder.record(
+            "reflection",
+            action_id=state.observations[-1].action_id,
+            status=reflection.status,
+            summary=reflection.summary,
+            next_hint=reflection.next_hint,
+        )
+        if reflection.status == "ABORT":
             self._finish(
                 state,
                 reflection.summary,
                 termination_reason="tool_error",
                 success=False,
             )
+        elif reflection.status == "REPLAN":
+            state.pending_actions.clear()
+            state.phase = AgentPhase.DECIDE
         elif state.pending_actions:
             state.phase = AgentPhase.ACT
         elif state.step_count >= state.max_steps:

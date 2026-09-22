@@ -10,3 +10,4 @@ class Observation:
     success: bool
     output: Any = None
     error: str | None = None
+    error_type: str | None = None

@@ -67,6 +67,7 @@ def test_run_recorder_links_action_and_observation():
         "llm_call",
         "action",
         "observation",
+        "reflection",
         "llm_call",
         "final",
     ]

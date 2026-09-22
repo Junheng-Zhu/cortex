@@ -9,6 +9,39 @@ from uuid import uuid4
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = PROJECT_ROOT / ".trace.db"
+SENSITIVE_KEYS = {"api_key", "authorization", "cookie", "password", "secret", "token"}
+MAX_TRACE_STRING = 2_000
+MAX_TRACE_ITEMS = 50
+
+
+def minimize_trace_value(value: Any, depth: int = 0) -> Any:
+    """Bound trace payloads and redact common credential fields."""
+    if depth >= 6:
+        return "<max-depth>"
+    if isinstance(value, dict):
+        result = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= MAX_TRACE_ITEMS:
+                result["<truncated>"] = len(value) - MAX_TRACE_ITEMS
+                break
+            result[str(key)] = (
+                "<redacted>"
+                if str(key).lower() in SENSITIVE_KEYS
+                else minimize_trace_value(item, depth + 1)
+            )
+        return result
+    if isinstance(value, (list, tuple)):
+        items = [
+            minimize_trace_value(item, depth + 1) for item in value[:MAX_TRACE_ITEMS]
+        ]
+        if len(value) > MAX_TRACE_ITEMS:
+            items.append(f"<{len(value) - MAX_TRACE_ITEMS} items truncated>")
+        return items
+    if isinstance(value, str):
+        return value[:MAX_TRACE_STRING]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:MAX_TRACE_STRING]
 
 
 @dataclass(frozen=True)
@@ -83,6 +116,7 @@ class RunRecorder:
         return summary
 
     def record(self, event_type: str, **data: Any) -> RunEvent:
+        data = minimize_trace_value(data)
         event = RunEvent(
             event_type=event_type,
             run_id=self.run_id,

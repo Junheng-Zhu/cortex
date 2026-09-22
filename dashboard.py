@@ -26,8 +26,11 @@ h1{margin:0 0 6px;font-size:28px}.sub{color:var(--muted);margin-bottom:24px}.too
 <script>
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ms=n=>`${Number(n||0).toFixed(1)} ms`;
+const eventData=e=>e.event_type==='llm_call'
+  ? `<b>LLM Request</b><pre class="data">${esc(JSON.stringify(e.data.request,null,2))}</pre><b>Raw Response</b><pre class="data">${esc(JSON.stringify({output_items:e.data.output_items,output_text:e.data.output_text,response_id:e.data.response_id},null,2))}</pre>`
+  : `<pre class="data">${esc(JSON.stringify(e.data,null,2))}</pre>`;
 async function refresh(){const data=await fetch('/api/runs').then(r=>r.json());const q=document.querySelector('#filter').value.toLowerCase();
-document.querySelector('#runs').innerHTML=data.filter(r=>JSON.stringify(r).toLowerCase().includes(q)).map(r=>`<details class="run"><summary><span><b class="${r.success?'ok':'fail'}">${r.success?'SUCCESS':'FAILED'}</b><br><span class="id">${esc(r.run_id)}</span><br><small>${esc(r.termination_reason)}</small></span><span class="metric">${r.steps} steps</span><span class="metric">${r.total_tokens} tokens</span><span class="metric">LLM ${ms(r.llm_latency_ms)}</span><span class="metric">总计 ${ms(r.latency_ms)}</span></summary><div class="events">${r.events.map(e=>`<div class="event"><span class="time">${esc(e.timestamp)}</span><span class="type">${esc(e.event_type)}</span><pre class="data">${esc(JSON.stringify(e.data,null,2))}</pre></div>`).join('')}</div></details>`).join('')||'<p class="sub">没有匹配的 Run。</p>'}
+document.querySelector('#runs').innerHTML=data.filter(r=>JSON.stringify(r).toLowerCase().includes(q)).map(r=>`<details class="run"><summary><span><b class="${r.success?'ok':'fail'}">${r.success?'SUCCESS':'FAILED'}</b><br><span class="id">${esc(r.run_id)}</span><br><small>${esc(r.termination_reason)}</small></span><span class="metric">${r.steps} steps</span><span class="metric">${r.total_tokens} tokens</span><span class="metric">LLM ${ms(r.llm_latency_ms)}</span><span class="metric">总计 ${ms(r.latency_ms)}</span></summary><div class="events">${r.events.map(e=>`<div class="event"><span class="time">${esc(e.timestamp)}</span><span class="type">${esc(e.event_type)}</span><div>${eventData(e)}</div></div>`).join('')}</div></details>`).join('')||'<p class="sub">没有匹配的 Run。</p>'}
 document.querySelector('#filter').addEventListener('input',refresh);refresh();setInterval(refresh,3000);
 </script></main></body></html>"""
 

@@ -1,9 +1,10 @@
 from agent.loop_new import AgentLoop
 from src.ops.tracer import RunRecorder
 from src.tools.executor import ToolExecutor
-from src.tools.file_tools import DeleteNoteTool, ReadNoteTool, SlowTool
+from src.tools.file_tools import DeleteNoteTool, ListNotesTool, ReadNoteTool, SlowTool
 from src.tools.permission import Permission
 from src.tools.registry import ToolRegistry
+from src.tools.shell_tool import ShellTool
 
 from .models import LLMClient
 
@@ -15,11 +16,13 @@ def build_agent(
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
+    registry.register(ListNotesTool())
     registry.register(ReadNoteTool())
     registry.register(DeleteNoteTool())
     registry.register(SlowTool())
+    registry.register(ShellTool())
     executor = ToolExecutor(
-        {Permission.READ, Permission.WRITE, Permission.DELETE},
+        {Permission.READ, Permission.WRITE, Permission.DELETE, Permission.EXECUTE},
         registry,
     )
     return AgentLoop(
