@@ -1,97 +1,76 @@
-import sys
+"""Small, dependency-light dashboard for run-oriented Cortex traces."""
+
+import json
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, render_template_string, jsonify
-from src.ops.tracer import get_recent_traces
+from flask import Flask, jsonify, render_template_string
+
+from src.ops.tracer import get_recent_runs, get_recent_traces
 
 app = Flask(__name__)
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Cortex 追踪仪表板</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-        h1 { color: #333; }
-        .trace-item { background: white; padding: 12px; margin: 8px 0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .timestamp { color: #888; font-size: 0.8em; }
-        .step-type { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; }
-        .step-user_input { background: #e3f2fd; color: #0d47a1; }
-        .step-gate { background: #fff3e0; color: #e65100; }
-        .step-llm_call { background: #e8f5e9; color: #1b5e20; }
-        .step-tool_call { background: #fce4ec; color: #880e4f; }
-        .step-response { background: #f3e5f5; color: #4a148c; }
-        .content { margin-top: 4px; color: #333; word-break: break-all; }
-        .meta { font-size: 0.8em; color: #666; margin-top: 4px; }
-        #filter { margin-bottom: 20px; padding: 8px; width: 300px; }
-    </style>
-</head>
-<body>
-    <h1>🧠 Cortex 实时追踪</h1>
-    <input type="text" id="filter" placeholder="按会话ID或内容过滤..." onkeyup="filterTable()">
-    <div id="traces"></div>
+HTML_TEMPLATE = r"""
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cortex Runs</title><style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#131b30;--muted:#91a0bd;--line:#283553;--good:#42d392;--bad:#ff6b7a;--accent:#76a8ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#eef3ff;font:14px system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px}
+h1{margin:0 0 6px;font-size:28px}.sub{color:var(--muted);margin-bottom:24px}.toolbar{display:flex;gap:12px;margin-bottom:18px}input{width:360px;max-width:100%;padding:11px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:inherit}
+.run{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:12px 0;overflow:hidden}.run>summary{cursor:pointer;padding:16px;list-style:none;display:grid;grid-template-columns:1fr repeat(4,auto);gap:18px;align-items:center}.id{font-family:ui-monospace,monospace;color:var(--accent)}.metric{color:var(--muted);white-space:nowrap}.ok{color:var(--good)}.fail{color:var(--bad)}
+.events{border-top:1px solid var(--line);padding:8px 16px 16px}.event{display:grid;grid-template-columns:150px 100px 1fr;gap:10px;padding:9px 0;border-bottom:1px solid #202b45}.type{font-weight:700}.data{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#cad5ea;font:12px ui-monospace,monospace}@media(max-width:700px){.run>summary{grid-template-columns:1fr 1fr}.event{grid-template-columns:1fr}.time{display:none}}
+</style></head><body><main><h1>Cortex Run Traces</h1><div class="sub">Run 汇总、模型延迟、工具执行与 token 使用情况</div>
+<div class="toolbar"><input id="filter" placeholder="筛选 run id、结束原因或事件…"></div><section id="runs"></section>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ms=n=>`${Number(n||0).toFixed(1)} ms`;
+async function refresh(){const data=await fetch('/api/runs').then(r=>r.json());const q=document.querySelector('#filter').value.toLowerCase();
+document.querySelector('#runs').innerHTML=data.filter(r=>JSON.stringify(r).toLowerCase().includes(q)).map(r=>`<details class="run"><summary><span><b class="${r.success?'ok':'fail'}">${r.success?'SUCCESS':'FAILED'}</b><br><span class="id">${esc(r.run_id)}</span><br><small>${esc(r.termination_reason)}</small></span><span class="metric">${r.steps} steps</span><span class="metric">${r.total_tokens} tokens</span><span class="metric">LLM ${ms(r.llm_latency_ms)}</span><span class="metric">总计 ${ms(r.latency_ms)}</span></summary><div class="events">${r.events.map(e=>`<div class="event"><span class="time">${esc(e.timestamp)}</span><span class="type">${esc(e.event_type)}</span><pre class="data">${esc(JSON.stringify(e.data,null,2))}</pre></div>`).join('')}</div></details>`).join('')||'<p class="sub">没有匹配的 Run。</p>'}
+document.querySelector('#filter').addEventListener('input',refresh);refresh();setInterval(refresh,3000);
+</script></main></body></html>"""
 
-    <script>
-        function fetchTraces() {
-            fetch('/api/traces')
-                .then(res => res.json())
-                .then(data => {
-                    const container = document.getElementById('traces');
-                    container.innerHTML = data.map(t => `
-                        <div class="trace-item" data-session="${t.session_id}" data-content="${t.content}">
-                            <div>
-                                <span class="step-type step-${t.step_type}">${t.step_type}</span>
-                                <span class="timestamp">${t.timestamp} | 会话: ${t.session_id}</span>
-                                ${t.duration_ms ? `⏱️ ${t.duration_ms.toFixed(0)}ms` : ''}
-                                ${t.tokens_used ? `🔢 ${t.tokens_used} tokens` : ''}
-                            </div>
-                            <div class="content">${t.content || '(空)'}</div>
-                            <div class="meta">${t.metadata || ''}</div>
-                        </div>
-                    `).join('');
-                });
-        }
 
-        function filterTable() {
-            const filter = document.getElementById('filter').value.toLowerCase();
-            const items = document.querySelectorAll('.trace-item');
-            items.forEach(item => {
-                const match = item.dataset.session.includes(filter) || item.dataset.content.toLowerCase().includes(filter);
-                item.style.display = match ? 'block' : 'none';
-            });
-        }
-
-        // 每 3 秒自动刷新
-        setInterval(fetchTraces, 3000);
-        fetchTraces();
-    </script>
-</body>
-</html>
-"""
-
-@app.route('/')
+@app.get("/")
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/traces')
+
+@app.get("/api/runs")
+def api_runs():
+    events_by_run = {}
+    for row in get_recent_traces(limit=500):
+        data = json.loads(row[7] or "{}")
+        events_by_run.setdefault(row[1], []).append(
+            {"timestamp": row[2], "event_type": row[3], "data": data}
+        )
+    runs = get_recent_runs(limit=100)
+    for run in runs:
+        run["success"] = bool(run["success"])
+        run["events"] = list(reversed(events_by_run.get(run["run_id"], [])))
+    return jsonify(runs)
+
+
+@app.get("/api/traces")
 def api_traces():
-    rows = get_recent_traces(limit=100)
-    data = []
-    for row in rows:
-        data.append({
-            "id": row[0],
-            "session_id": row[1],
-            "timestamp": row[2],
-            "step_type": row[3],
-            "content": row[4],
-            "duration_ms": row[5],
-            "tokens_used": row[6],
-            "metadata": row[7]
-        })
-    return jsonify(data)
+    """Compatibility endpoint for integrations still consuming flat events."""
+    return jsonify(
+        [
+            {
+                "id": r[0],
+                "run_id": r[1],
+                "timestamp": r[2],
+                "event_type": r[3],
+                "content": r[4],
+                "duration_ms": r[5],
+                "tokens_used": r[6],
+                "data": json.loads(r[7] or "{}"),
+            }
+            for r in get_recent_traces(limit=100)
+        ]
+    )
+
 
 if __name__ == "__main__":
-    # 安装 flask 依赖：pip install flask
-    app.run(debug=True, port=5000)
+    app.run(port=5000)
