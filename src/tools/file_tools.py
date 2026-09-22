@@ -1,21 +1,19 @@
-import os
 import glob
-from typing import List, Dict, Any
-from .base import Tool
-from .schemas import *
+import os
 from pathlib import Path
-from .exceptions import *
-from .permission import Permission
 from time import sleep
+from typing import List
 
+from .base import Tool
+from .exceptions import ToolFileNotFoundError, ToolSandboxError
+from .permission import Permission
+from .schemas import DeleteNoteInput, EmptyInput, ReadNoteInput, SlowToolInput
 
 
 # 设置笔记目录（项目根目录下的 notes 文件夹）
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 NOTES_DIR = BASE_DIR / "notes"
-
-
 
 
 def list_notes() -> List[str]:
@@ -37,7 +35,7 @@ def read_note(filename: str) -> str:
     参数 filename: 文件名（如 "python.md"）
     """
     filepath = NOTES_DIR / filename
-    
+
     filep = Path(filepath).resolve()
 
     # 安全检查：防止通过 ../ 读取其他目录
@@ -45,8 +43,7 @@ def read_note(filename: str) -> str:
         raise ToolSandboxError("读取其他路径", "read_note", filep.resolve())
 
     if not filep.exists():
-        raise ToolFileNotFoundError("文件不存在","read_note",filepath)
-
+        raise ToolFileNotFoundError("文件不存在", "read_note", filepath)
 
     content = filep.read_text(encoding="utf-8")
     return content
@@ -56,9 +53,9 @@ def delete_note(filename: str) -> bool:
 
     pass
 
-def slow_tool(a:int):
-    sleep(a)
 
+def slow_tool(a: int):
+    sleep(a)
 
 
 class ReadNoteTool(Tool):
@@ -74,6 +71,20 @@ class ReadNoteTool(Tool):
 
         return read_note(input.filename)
 
+
+class ListNotesTool(Tool):
+    name = "list_notes"
+    description = "列出 notes 目录下可供读取的文件名。读取未知笔记前应先调用此工具。"
+    input_model = EmptyInput
+    permission = Permission.READ
+    timeout = 5
+    max_retries = 0
+    retryable = False
+
+    def execute(self, input) -> list[str]:
+        return list_notes()
+
+
 class DeleteNoteTool(Tool):
     name = "delete_note"
     description = "删除 notes 目录下指定文件。"
@@ -83,7 +94,7 @@ class DeleteNoteTool(Tool):
     max_retries = 0
     retryable = False
 
-    def execute(self,input)->bool:
+    def execute(self, input) -> bool:
 
         pass
 
@@ -97,7 +108,5 @@ class SlowTool(Tool):
     max_retries = 3
     retryable = True
 
-    def execute(self,input):
+    def execute(self, input):
         slow_tool(input.seconds)
-
-        
