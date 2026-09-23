@@ -11,7 +11,6 @@ import multiprocessing
 
 
 class ToolExecutor:
-
     def __init__(self, allowed_permissions: set, registry: ToolRegistry):
         self.registry = registry
         self.allowed_permissions = allowed_permissions
@@ -29,26 +28,56 @@ class ToolExecutor:
         return tool.permission in self.allowed_permissions
 
     def _validate(self, tool: Tool, arguments) -> Any:
-        return tool.input_model(**arguments)
+        normalized_arguments = dict(arguments)
+        for name, field in tool.input_model.model_fields.items():
+            if normalized_arguments.get(name) is None and not field.is_required():
+                # In a strict provider schema a defaulted field is required but
+                # nullable. Null therefore means "use the Pydantic default".
+                normalized_arguments.pop(name, None)
+        return tool.input_model(**normalized_arguments)
 
-    
+    def _runtime_timeout(self, tool: Tool) -> float:
+        """Return the executor-enforced hard limit for one tool attempt."""
+        return min(tool.timeout, self.timeout)
+
+    def _apply_runtime_limits(self, tool: Tool, validated_input: Any) -> Any:
+        """Clamp a tool's requested timeout to the runtime hard limit."""
+        if not hasattr(validated_input, "timeout"):
+            return validated_input
+        runtime_limit = self._runtime_timeout(tool)
+        requested = validated_input.timeout
+        effective_timeout = (
+            min(requested, runtime_limit) if requested else runtime_limit
+        )
+        return validated_input.model_copy(update={"timeout": effective_timeout})
+
     @staticmethod
     def _strict_parameters_schema(schema: dict) -> dict:
-        """Validate and normalize Pydantic JSON Schema for strict functions."""
+        """Adapt Pydantic JSON Schema to the Responses strict-tool contract."""
         normalized = deepcopy(schema)
+
+        def allow_null(property_schema: dict) -> None:
+            """Preserve Pydantic omission semantics after making a key required."""
+            property_schema.pop("default", None)
+            variants = property_schema.get("anyOf")
+            if isinstance(variants, list):
+                if not any(item.get("type") == "null" for item in variants):
+                    variants.append({"type": "null"})
+                return
+
+            original = dict(property_schema)
+            property_schema.clear()
+            property_schema["anyOf"] = [original, {"type": "null"}]
 
         def visit(node: object) -> None:
             if isinstance(node, dict):
                 if node.get("type") == "object" or "properties" in node:
                     properties = node.get("properties", {})
                     required = set(node.get("required", []))
-                    missing = set(properties) - required
-                    if missing:
-                        names = ", ".join(sorted(missing))
-                        raise ValueError(
-                            "Strict tool schemas require every property to be "
-                            f"required; missing: {names}"
-                        )
+                    for name, property_schema in properties.items():
+                        if name not in required and isinstance(property_schema, dict):
+                            allow_null(property_schema)
+                    node["required"] = list(properties)
                     node["additionalProperties"] = False
 
                 for value in node.values():
@@ -72,8 +101,7 @@ class ToolExecutor:
             ),
             "strict": True,
         }
-    
-    
+
     def list_tool_schemas(self) -> list:
         schemas = []
 
@@ -82,7 +110,6 @@ class ToolExecutor:
             schemas.append(schema)
 
         return schemas
-
 
     def _execute_once(self, tool: Tool, validated_input) -> Any:
         return tool.execute(validated_input)
@@ -118,7 +145,7 @@ class ToolExecutor:
     def _execute_with_retry(self, tool: Tool, validated_input) -> ToolResult:
         attempts = 0
         tool_retries = min(tool.max_retries, self.max_retries)
-        tool_timeout = min(tool.timeout, self.timeout)
+        tool_timeout = self._runtime_timeout(tool)
 
         for i in range(tool_retries + 1):
             attempts += 1
@@ -180,9 +207,11 @@ class ToolExecutor:
                 error_type="ToolPermissionError",
                 error_message="Permission denied",
                 data=None,
+                validation_passed=None,
             )
         try:
             validated_input = self._validate(tool, arguments)
+            validated_input = self._apply_runtime_limits(tool, validated_input)
         except ValidationError as e:
             return ToolResult(
                 tool_name=tool.name,
@@ -192,9 +221,11 @@ class ToolExecutor:
                 error_type="ToolValidationError",
                 error_message=str(e),
                 data=None,
+                validation_passed=False,
             )
 
         tool_result = self._execute_with_retry(tool, validated_input)
+        tool_result.validation_passed = True
         end = time.perf_counter()
         tool_result.duration_ms = int((end - start) * 1000)
         return tool_result

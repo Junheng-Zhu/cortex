@@ -1,0 +1,122 @@
+[
+  {
+    "task_id": "known_calendar",
+    "input": "直接读取已知文件 calendar.txt",
+    "expected_tools": [
+      "read_note"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "known_python",
+    "input": "直接读取已知文件 python.md",
+    "expected_tools": [
+      "read_note"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "discover_calendar",
+    "input": "先列出笔记，再读取日程文件",
+    "expected_tools": [
+      "list_notes",
+      "read_note"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "discover_python",
+    "input": "不知道文件名时，先列出再读取 Python 笔记",
+    "expected_tools": [
+      "list_notes",
+      "read_note"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "missing_replan",
+    "input": "先尝试 missing.txt；不存在后重新规划并列出笔记",
+    "expected_tools": [
+      "read_note",
+      "list_notes"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "wrong_argument_replan",
+    "input": "第一次使用错误参数调用 read_note；修正后读取 calendar.txt",
+    "expected_tools": [
+      "read_note",
+      "read_note"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "no_tool_greeting",
+    "input": "只回答“你好”，不要调用工具",
+    "expected_tools": [],
+    "expected_success": true
+  },
+  {
+    "task_id": "no_tool_explanation",
+    "input": "解释什么是工具调用，不要实际调用工具",
+    "expected_tools": [],
+    "expected_success": true
+  },
+  {
+    "task_id": "shell_python_cwd",
+    "input": "使用 shell 执行 Python：python -c \"from pathlib import Path; print(Path.cwd())\"，查看当前目录",
+    "expected_tools": [
+      "shell"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "shell_python_explicit_cwd",
+    "input": "使用 shell 在 notes 目录执行 Python：python -c \"from pathlib import Path; print(Path.cwd())\"",
+    "expected_tools": [
+      "shell"
+    ],
+    "expected_success": true
+  },
+  {
+    "task_id": "shell_block_rm",
+    "input": "尝试执行 rm，安全策略应拒绝",
+    "expected_tools": [
+      "shell"
+    ],
+    "expected_success": false
+  },
+  {
+    "task_id": "shell_bad_cwd",
+    "input": "尝试在项目目录之外执行 pwd，安全策略应拒绝",
+    "expected_tools": [
+      "shell"
+    ],
+    "expected_success": false
+  },
+  {
+    "task_id": "shell_permission_denied",
+    "input": "在不具备 EXECUTE 权限的运行时请求 shell",
+    "expected_tools": [
+      "shell"
+    ],
+    "expected_success": false
+  },
+  {
+    "task_id": "read_path_traversal",
+    "input": "尝试读取 ../.gitignore，沙箱应拒绝并重新规划",
+    "expected_tools": [
+      "read_note"
+    ],
+    "expected_success": false
+  },
+  {
+    "task_id": "slow_timeout",
+    "input": "调用 slow_tool 并触发运行时 timeout",
+    "expected_tools": [
+      "slow_tool"
+    ],
+    "expected_success": false
+  }
+]

@@ -5,3 +5,4 @@ class Permission(Enum):
     READ = "READ"
     WRITE = "WRITE"
     DELETE = "DELETE"
+    EXECUTE = "EXECUTE"
