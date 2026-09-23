@@ -11,3 +11,9 @@ class Observation:
     output: Any = None
     error: str | None = None
     error_type: str | None = None
+    preview: str | None = None
+    artifact_id: str | None = None
+    artifact_ref: str | None = None
+    artifact_path: str | None = None
+    size_chars: int | None = None
+    truncated: bool = False

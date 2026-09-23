@@ -5,6 +5,9 @@ from uuid import uuid4
 from runtime.action import Action
 from runtime.observation import Observation
 from src.core.models import ContextMode
+from src.context.artifact_store import ArtifactStore
+from src.context.context_manager import ContextManager
+from src.context.observation_policy import ObservationPolicy
 from src.ops.tracer import RunRecorder
 
 from .models import LLMResponse, LLMUsage, ToolCall
@@ -22,6 +25,9 @@ class AgentLoop:
         max_steps: int = 10,
         context_mode: ContextMode | None = None,
         recorder: RunRecorder | None = None,
+        artifact_store: ArtifactStore | None = None,
+        observation_policy: ObservationPolicy | None = None,
+        context_manager: ContextManager | None = None,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -36,6 +42,11 @@ class AgentLoop:
         self.context_mode = ContextMode(configured_context_mode)
         self.recorder = recorder or RunRecorder()
         self.reflector = Reflector()
+        self.artifact_store = artifact_store or ArtifactStore()
+        self.observation_policy = observation_policy or ObservationPolicy(
+            self.artifact_store
+        )
+        self.context_manager = context_manager or ContextManager()
         self.last_state: AgentState | None = None
 
     def run(self, query: str) -> str | None:
@@ -44,6 +55,7 @@ class AgentLoop:
         state = AgentState(
             max_steps=self.max_steps,
             pending_input=[{"role": "user", "content": query}],
+            current_goal=query,
         )
         self.last_state = state
         while state.phase is not AgentPhase.FINAL:
@@ -97,12 +109,9 @@ class AgentLoop:
         ):
             state.pending_input = list(state.messages)
 
-        if self.context_mode is ContextMode.SERVER_MANAGED:
-            request_input = list(state.pending_input)
-            previous_response_id = state.previous_response_id
-        else:
-            request_input = [*state.context_history, *state.pending_input]
-            previous_response_id = None
+        request_input, previous_response_id = self.context_manager.build_context(
+            state, self.context_mode
+        )
 
         request_tools = self.executor.list_tool_schemas()
         started = time.perf_counter()
@@ -239,25 +248,29 @@ class AgentLoop:
                 error_type=type(result).__name__,
             )
         else:
-            observation = Observation(
-                action_id=action.action_id,
-                success=result.success,
-                output=result.data if result.success else None,
-                error=(
-                    None
-                    if result.success
-                    else result.error_message or result.error_type
-                ),
-                error_type=None if result.success else result.error_type,
-            )
+            if result.success:
+                observation = self.observation_policy.success(
+                    action.action_id, action.tool_name, result.data
+                )
+            else:
+                observation = Observation(
+                    action_id=action.action_id,
+                    success=False,
+                    error=result.error_message or result.error_type,
+                    error_type=result.error_type,
+                )
 
         state.observations.append(observation)
+        if observation.artifact_ref:
+            state.artifact_references.append(observation.artifact_ref)
         state.pending_input.append(
             {
                 "type": "function_call_output",
                 "call_id": action.call_id,
-                "output": str(
-                    observation.output if observation.success else observation.error
+                "output": (
+                    self.observation_policy.model_output(action.tool_name, observation)
+                    if observation.success
+                    else str(observation.error)
                 ),
             }
         )
@@ -268,6 +281,10 @@ class AgentLoop:
             success=observation.success,
             output_preview=self.recorder.preview(observation.output),
             output_length=self.recorder.output_length(observation.output),
+            artifact_ref=observation.artifact_ref,
+            artifact_path=observation.artifact_path,
+            size_chars=observation.size_chars,
+            truncated=observation.truncated,
             error=observation.error,
             error_type=observation.error_type,
         )

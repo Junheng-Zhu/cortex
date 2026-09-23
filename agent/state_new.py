@@ -35,3 +35,8 @@ class AgentState:
     step_count: int = 0
     max_steps: int = 10
     token_budget: int = 4096
+    current_goal: str | None = None
+    current_plan: list[str] = field(default_factory=list)
+    important_decisions: list[str] = field(default_factory=list)
+    artifact_references: list[str] = field(default_factory=list)
+    compact_summary: str = ""

@@ -1,5 +1,7 @@
 from agent.loop_new import AgentLoop
 from src.ops.tracer import RunRecorder
+from src.context.artifact_store import ArtifactStore
+from src.tools.artifact_tools import ReadArtifactChunkTool
 from src.tools.executor import ToolExecutor
 from src.tools.file_tools import DeleteNoteTool, ListNotesTool, ReadNoteTool, SlowTool
 from src.tools.permission import Permission
@@ -17,11 +19,13 @@ def build_agent(
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
+    artifact_store = ArtifactStore()
     registry.register(ListNotesTool())
     registry.register(ReadNoteTool())
     registry.register(DeleteNoteTool())
     registry.register(SlowTool())
     registry.register(ShellTool())
+    registry.register(ReadArtifactChunkTool(artifact_store))
     executor = ToolExecutor(
         allowed_permissions
         if allowed_permissions is not None
@@ -33,6 +37,7 @@ def build_agent(
         executor=executor,
         max_steps=max_steps,
         recorder=recorder,
+        artifact_store=artifact_store,
     )
 
 
