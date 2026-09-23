@@ -79,6 +79,7 @@ class FlakyTool(Tool):
         if current_attempt == 1:
             # 用 ToolTimeoutError 测试当前 Executor 的 retry policy。
             from src.tools.exceptions import ToolTimeoutError
+
             raise ToolTimeoutError("simulated transient timeout")
 
         return "success"
@@ -114,6 +115,7 @@ def test_success():
     assert result.attempts == 1
     assert result.error_type is None
     assert result.error_message is None
+    assert result.validation_passed is True
 
 
 def test_validation_error():
@@ -126,6 +128,7 @@ def test_validation_error():
     assert result.success is False
     assert result.error_type == "ToolValidationError"
     assert result.attempts == 0
+    assert result.validation_passed is False
 
 
 def test_permission_denied():
@@ -138,6 +141,7 @@ def test_permission_denied():
     assert result.success is False
     assert result.error_type == "ToolPermissionError"
     assert result.attempts == 0
+    assert result.validation_passed is None
 
 
 def test_timeout():

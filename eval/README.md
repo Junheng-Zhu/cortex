@@ -73,6 +73,30 @@ CI 运行失败时，GitHub Actions 会阻止对应的 Check 通过。
 
 Online Agent Eval 属于下一阶段能力，后续可以接入真实 LLM 和 GitHub Secrets。
 
+## 六项基线指标
+
+`eval/metrics.py` 从 `EvalRun` 列表聚合 Task Success Rate、Tool Selection
+Accuracy、Argument Valid Rate、Average Steps、p50/p95 Latency 和每个成功任务的
+Token 数。首批 15 个明确的小任务保存在 `eval/baseline_tasks.json`。
+
+`eval/baseline.json` 是用于验证指标管道的离线 deterministic fixture baseline，
+不是在线模型质量结论；接入带 API Key 的模型后，应使用同一任务集重新生成 online
+baseline。
+
+### 运行真实 Online Baseline
+
+配置 `OPENAI_API_KEY`（以及可选的 `OPENAI_BASE_URL`、`MODEL_NAME`）后运行：
+
+```bash
+python eval/run_baseline.py
+```
+
+该入口会加载固定的 15 个任务，使用真实 `LLMClient` 逐项执行，通过
+`DeterministicGrader` 评分并调用 `aggregate_metrics()`，最后写入
+`eval/online_baseline.json`，完整 Trace 单独写入带时间戳的 `eval/raw/` 文件。
+也可用 `--model`、`--base-url`、`--tasks`、`--output`、`--raw-dir` 和
+`--no-raw` 覆盖默认配置。
+
 ## 退出码
 
 - `0`：PASS，可继续。

@@ -11,6 +11,8 @@ from src.core.models import (
     ProviderCapabilities,
     parse_responses_response,
 )
+from src.core.loop import build_agent
+from src.tools.schemas import ShellInput
 from src.tools.result import ToolResult
 
 
@@ -52,6 +54,27 @@ class ResponsesLLM:
                 }
             ],
         )
+
+
+def test_build_agent_generates_strict_compatible_shell_schema():
+    schemas = build_agent(object()).executor.list_tool_schemas()
+    shell = next(schema for schema in schemas if schema["name"] == "shell")
+    parameters = shell["parameters"]
+
+    assert shell["strict"] is True
+    assert parameters["additionalProperties"] is False
+    assert set(parameters["required"]) == {"command", "cwd", "timeout"}
+    assert {
+        variant["type"] for variant in parameters["properties"]["cwd"]["anyOf"]
+    } == {"string", "null"}
+    assert {
+        variant["type"] for variant in parameters["properties"]["timeout"]["anyOf"]
+    } == {"number", "null"}
+
+    defaults = ShellInput(command="pwd")
+    explicit = ShellInput(command="pwd", cwd=".", timeout=3)
+    assert defaults.cwd is None and defaults.timeout is None
+    assert explicit.cwd == "." and explicit.timeout == 3
 
 
 def test_response_parser_preserves_usage_and_output_items():
