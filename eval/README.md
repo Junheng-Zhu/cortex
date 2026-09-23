@@ -93,8 +93,9 @@ python eval/run_baseline.py
 
 该入口会加载固定的 15 个任务，使用真实 `LLMClient` 逐项执行，通过
 `DeterministicGrader` 评分并调用 `aggregate_metrics()`，最后写入
-`eval/online_baseline.json`。也可用 `--model`、`--base-url`、`--tasks` 和
-`--output` 覆盖默认配置。
+`eval/online_baseline.json`，完整 Trace 单独写入带时间戳的 `eval/raw/` 文件。
+也可用 `--model`、`--base-url`、`--tasks`、`--output`、`--raw-dir` 和
+`--no-raw` 覆盖默认配置。
 
 ## 退出码
 

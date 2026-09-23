@@ -13,6 +13,7 @@ def build_agent(
     client: LLMClient,
     recorder: RunRecorder | None = None,
     max_steps: int = 10,
+    allowed_permissions: set[Permission] | None = None,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -22,7 +23,9 @@ def build_agent(
     registry.register(SlowTool())
     registry.register(ShellTool())
     executor = ToolExecutor(
-        {Permission.READ, Permission.WRITE, Permission.DELETE, Permission.EXECUTE},
+        allowed_permissions
+        if allowed_permissions is not None
+        else {Permission.READ, Permission.WRITE, Permission.DELETE, Permission.EXECUTE},
         registry,
     )
     return AgentLoop(

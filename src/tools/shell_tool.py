@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from .base import Tool
+from .exceptions import ToolSandboxError
 from .permission import Permission
 from .schemas import ShellInput
 
@@ -39,7 +40,9 @@ class ShellTool(Tool):
     def execute(self, input: ShellInput) -> dict[str, int | str | bool]:
         cwd = (PROJECT_ROOT / (input.cwd or ".")).resolve()
         if not cwd.is_relative_to(PROJECT_ROOT) or not cwd.is_dir():
-            raise ValueError("cwd must be an existing directory inside the project")
+            raise ToolSandboxError(
+                "cwd must be an existing directory inside the project", "shell", cwd
+            )
 
         argv = shlex.split(input.command)
         if not argv:
@@ -48,7 +51,9 @@ class ShellTool(Tool):
         if program in BLOCKED_PROGRAMS or any(
             token in SHELL_OPERATORS for token in argv
         ):
-            raise ValueError("command is not allowed by the shell safety policy")
+            raise ToolSandboxError(
+                "command is not allowed by the shell safety policy", "shell", cwd
+            )
 
         try:
             completed = subprocess.run(

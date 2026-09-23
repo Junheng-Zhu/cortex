@@ -7,3 +7,4 @@ __pycache__/
 .memory_db/
 .trace.db
 eval/online_baseline.json
+eval/raw/

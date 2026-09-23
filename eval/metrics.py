@@ -9,6 +9,7 @@ from .runner import EvalRun
 @dataclass(frozen=True)
 class EvalMetrics:
     task_success_rate: float
+    run_success_rate: float
     tool_selection_accuracy: float
     argument_valid_rate: float
     average_steps: float
@@ -33,11 +34,13 @@ def _percentile(values: list[float], percentile: float) -> float:
 def aggregate_metrics(runs: list[EvalRun]) -> EvalMetrics:
     """Compute metrics from raw EvalRun records without an LLM judge."""
     if not runs:
-        return EvalMetrics(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+        return EvalMetrics(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
 
     successful = [run for run in runs if run.grade and run.grade.task_success]
     tool_matches = [
-        run.grade.expected_tools_matched for run in runs if run.grade is not None
+        run.grade.required_tools_matched and not run.grade.forbidden_tool_used
+        for run in runs
+        if run.grade is not None
     ]
     validation_results = [
         event["validation_passed"]
@@ -49,6 +52,7 @@ def aggregate_metrics(runs: list[EvalRun]) -> EvalMetrics:
 
     return EvalMetrics(
         task_success_rate=len(successful) / len(runs),
+        run_success_rate=sum(run.run_success for run in runs) / len(runs),
         tool_selection_accuracy=(
             sum(tool_matches) / len(tool_matches) if tool_matches else 0.0
         ),

@@ -16,6 +16,8 @@ from src.core.loop import build_agent
 from src.core.models import ContextMode, ProviderCapabilities
 from src.ops.tracer import RunRecorder
 from src.tools.result import ToolResult
+from src.tools.exceptions import ToolSandboxError
+from src.tools.permission import Permission
 from src.tools.schemas import ShellInput
 from src.tools.shell_tool import ShellTool
 
@@ -125,9 +127,9 @@ def test_shell_tool_restricts_cwd_and_dangerous_commands():
     result = tool.execute(ShellInput(command="python -c 'print(123)'"))
     assert result["exit_code"] == 0
     assert result["stdout"].strip() == "123"
-    with pytest.raises(ValueError):
+    with pytest.raises(ToolSandboxError):
         tool.execute(ShellInput(command="rm -rf ."))
-    with pytest.raises(ValueError):
+    with pytest.raises(ToolSandboxError):
         tool.execute(ShellInput(command="pwd", cwd=str(Path("..").resolve())))
 
 
@@ -148,16 +150,43 @@ def test_runtime_registers_discovery_and_shell_tools():
 def test_eval_runner_collects_raw_metric_inputs_and_grades_task_separately():
     responses = [response("c1", "list_notes"), response(content="done")]
 
-    def factory(recorder):
+    def factory(recorder, task):
         return AgentLoop(ScriptedLLM(responses), NotesExecutor(), recorder=recorder)
 
     result = EvalRunner(factory, DeterministicGrader()).run(
-        [Task("discover", "list", expected_tools=["read_note"])]
+        [Task("discover", "list", required_tools=["read_note"])]
     )[0]
 
     assert result.run_id
     assert result.steps == 1
     assert result.total_tokens == 6
     assert result.llm_calls and result.observations and result.reflections
-    assert result.success is True
+    assert result.run_success is True
     assert result.grade.task_success is False
+
+
+def test_permission_case_uses_runtime_without_execute_permission():
+    llm = ScriptedLLM([response("shell", "shell", {"command": "python -V"})])
+
+    def factory(recorder, task):
+        return build_agent(
+            llm,
+            recorder=recorder,
+            allowed_permissions={Permission.READ},
+        )
+
+    task = Task(
+        "permission",
+        "run shell",
+        required_tools=["shell"],
+        expected_outcome="PERMISSION_DENIED",
+        expected_error_type="ToolPermissionError",
+        excluded_permissions=["EXECUTE"],
+    )
+    result = EvalRunner(factory).run([task])[0]
+
+    assert result.run_success is True
+    assert result.outcome == "PERMISSION_DENIED"
+    assert result.action_events[0]["status"] == "FAILED"
+    assert result.action_events[0]["error_type"] == "ToolPermissionError"
+    assert result.grade.task_success is True
