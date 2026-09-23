@@ -17,9 +17,9 @@ from eval.grader import DeterministicGrader
 from eval.metrics import aggregate_metrics
 from eval.runner import EvalRun, EvalRunner
 from eval.tasks import Task
-from src.core.loop import build_agent
-from src.core.models import LLMClient
-from src.tools.permission import Permission
+from cortex.app.bootstrap import build_agent
+from cortex.llm.client import LLMClient
+from cortex.tools.permission import Permission
 
 DEFAULT_TASKS = ROOT / "eval" / "baseline_tasks.json"
 DEFAULT_OUTPUT = ROOT / "eval" / "online_baseline.json"

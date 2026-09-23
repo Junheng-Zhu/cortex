@@ -7,19 +7,19 @@ import pytest
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from agent.loop_new import AgentLoop
-from agent.models import LLMResponse, LLMUsage, ToolCall
+from cortex.runtime.loop import AgentLoop
+from cortex.llm.protocol import LLMResponse, LLMUsage, ToolCall
 from eval.grader import DeterministicGrader
 from eval.runner import EvalRunner
 from eval.tasks import Task
-from src.core.loop import build_agent
-from src.core.models import ContextMode, ProviderCapabilities
-from src.ops.tracer import RunRecorder
-from src.tools.result import ToolResult
-from src.tools.exceptions import ToolSandboxError
-from src.tools.permission import Permission
-from src.tools.schemas import ShellInput
-from src.tools.shell_tool import ShellTool
+from cortex.app.bootstrap import build_agent
+from cortex.llm.capabilities import ContextMode, ProviderCapabilities
+from cortex.observability.tracer import RunRecorder
+from cortex.tools.executor import ToolResult
+from cortex.tools.base import ToolSandboxError
+from cortex.tools.permission import Permission
+from cortex.tools.builtin.shell import ShellInput
+from cortex.tools.builtin.shell import ShellTool
 
 
 class ScriptedLLM:

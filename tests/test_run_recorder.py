@@ -4,10 +4,10 @@ import sys
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from agent.loop_new import AgentLoop
-from src.core import loop as core_loop
-from src.core.models import ContextMode
-from src.ops.tracer import RunRecorder
+from cortex.runtime.loop import AgentLoop
+from cortex.app import bootstrap as core_loop
+from cortex.llm.capabilities import ContextMode
+from cortex.observability.tracer import RunRecorder
 
 from tests.test_responses_protocol import Executor, ResponsesLLM
 

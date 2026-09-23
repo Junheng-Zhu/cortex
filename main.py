@@ -1,10 +1,4 @@
-from src.core.models import LLMClient
-from src.core.loop import run_loop
-
-
-def main() -> None:
-    client = LLMClient()
-    run_loop(client)
+from cortex.app.cli import main
 
 
 if __name__ == "__main__":

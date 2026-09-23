@@ -2,6 +2,4 @@ openai>=1.66.0,<3
 python-dotenv>=1.0
 tenacity>=8.0
 pytest>=8.0
-chromadb
-sentence-transformers
-flask
+flask>=3.0

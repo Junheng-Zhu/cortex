@@ -4,16 +4,16 @@ import sys
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from agent.loop_new import AgentLoop
-from agent.models import LLMResponse, LLMUsage, ToolCall
-from src.core.models import (
+from cortex.runtime.loop import AgentLoop
+from cortex.llm.protocol import LLMResponse, LLMUsage, ToolCall
+from cortex.llm import (
     ContextMode,
     ProviderCapabilities,
     parse_responses_response,
 )
-from src.core.loop import build_agent
-from src.tools.schemas import ShellInput
-from src.tools.result import ToolResult
+from cortex.app.bootstrap import build_agent
+from cortex.tools.builtin.shell import ShellInput
+from cortex.tools.executor import ToolResult
 
 
 class Executor:

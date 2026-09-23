@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 import time
 from typing import Callable
 
-from src.ops.tracer import RunRecorder
+from cortex.observability.tracer import RunRecorder
 
 from .grader import DeterministicGrader, GradeResult, Grader
 from .tasks import Task

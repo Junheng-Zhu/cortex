@@ -9,8 +9,8 @@ from eval import run_baseline
 from eval.grader import GradeResult
 from eval.runner import EvalRun
 from eval.tasks import Task
-from src.ops.tracer import RunRecorder
-from src.tools.permission import Permission
+from cortex.observability.tracer import RunRecorder
+from cortex.tools.permission import Permission
 
 
 def test_online_baseline_catalog_loads_all_fixed_tasks():
