@@ -83,6 +83,19 @@ Token 数。首批 15 个明确的小任务保存在 `eval/baseline_tasks.json`�
 不是在线模型质量结论；接入带 API Key 的模型后，应使用同一任务集重新生成 online
 baseline。
 
+### 运行真实 Online Baseline
+
+配置 `OPENAI_API_KEY`（以及可选的 `OPENAI_BASE_URL`、`MODEL_NAME`）后运行：
+
+```bash
+python eval/run_baseline.py
+```
+
+该入口会加载固定的 15 个任务，使用真实 `LLMClient` 逐项执行，通过
+`DeterministicGrader` 评分并调用 `aggregate_metrics()`，最后写入
+`eval/online_baseline.json`。也可用 `--model`、`--base-url`、`--tasks` 和
+`--output` 覆盖默认配置。
+
 ## 退出码
 
 - `0`：PASS，可继续。

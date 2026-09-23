@@ -64,16 +64,16 @@
     "expected_success": true
   },
   {
-    "task_id": "shell_pwd",
-    "input": "使用 shell 查看当前目录",
+    "task_id": "shell_python_cwd",
+    "input": "使用 shell 执行 Python：python -c \"from pathlib import Path; print(Path.cwd())\"，查看当前目录",
     "expected_tools": [
       "shell"
     ],
     "expected_success": true
   },
   {
-    "task_id": "shell_explicit_cwd",
-    "input": "使用 shell 在 notes 目录执行 pwd",
+    "task_id": "shell_python_explicit_cwd",
+    "input": "使用 shell 在 notes 目录执行 Python：python -c \"from pathlib import Path; print(Path.cwd())\"",
     "expected_tools": [
       "shell"
     ],
