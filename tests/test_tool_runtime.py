@@ -9,10 +9,10 @@ from pydantic import BaseModel
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.tools.base import Tool
-from src.tools.executor import ToolExecutor
-from src.tools.permission import Permission
-from src.tools.registry import ToolRegistry
+from cortex.tools.base import Tool
+from cortex.tools.executor import ToolExecutor
+from cortex.tools.permission import Permission
+from cortex.tools.registry import ToolRegistry
 
 
 class EmptyInput(BaseModel):
@@ -78,7 +78,7 @@ class FlakyTool(Tool):
 
         if current_attempt == 1:
             # 用 ToolTimeoutError 测试当前 Executor 的 retry policy。
-            from src.tools.exceptions import ToolTimeoutError
+            from cortex.tools.base import ToolTimeoutError
 
             raise ToolTimeoutError("simulated transient timeout")
 

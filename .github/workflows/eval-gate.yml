@@ -38,10 +38,10 @@ jobs:
       - name: Run Responses protocol tests
         run: >-
           python -m pytest -q
-          playground/test_agent_models.py
-          playground/test_agent_state_machine.py
           tests/test_responses_protocol.py
           tests/test_tool_runtime.py
+          tests/test_agent_multistep.py
+          tests/test_context_engineering.py
 
       - name: Run deterministic Eval
         run: python eval/smoke_eval.py

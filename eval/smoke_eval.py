@@ -4,8 +4,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.tools.file_tools import list_notes, read_note
-from src.tools.exceptions import ToolFileNotFoundError, ToolSandboxError
+from cortex.tools.builtin.notes import list_notes, read_note
+from cortex.tools.base import ToolFileNotFoundError, ToolSandboxError
 
 
 def check(condition, message):
