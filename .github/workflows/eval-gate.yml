@@ -35,13 +35,8 @@ jobs:
           "tenacity>=8.0"
           "pytest>=8.0"
 
-      - name: Run Responses protocol tests
-        run: >-
-          python -m pytest -q
-          tests/test_responses_protocol.py
-          tests/test_tool_runtime.py
-          tests/test_agent_multistep.py
-          tests/test_context_engineering.py
+      - name: Run test suite
+        run: python -m pytest -q tests
 
       - name: Run deterministic Eval
         run: python eval/smoke_eval.py

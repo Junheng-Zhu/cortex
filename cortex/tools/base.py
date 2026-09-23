@@ -47,3 +47,11 @@ class ToolFileNotFoundError(ToolSandboxError):
 
 class ToolTimeoutError(ToolError):
     pass
+
+
+class ShellUnavailableError(ToolError):
+    """The host does not provide a Bash executable for the shell runtime."""
+
+
+class ShellExecutionError(ToolError):
+    """Bash was found, but its process could not be started."""

@@ -1,19 +1,29 @@
-"""A deliberately small, constrained command execution tool."""
+"""A workspace-confined Bash runtime with one cross-platform contract."""
 
+import os
 import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-from ..base import Tool
-from ..base import ToolSandboxError
-from ..permission import Permission
 from pydantic import BaseModel, Field
+
+from ..base import (
+    ShellExecutionError,
+    ShellUnavailableError,
+    Tool,
+    ToolSandboxError,
+    ToolTimeoutError,
+)
+from ..permission import Permission
 
 
 class ShellInput(BaseModel):
     command: str = Field(min_length=1, max_length=2000)
     cwd: str | None = None
     timeout: float | None = Field(default=None, gt=0, le=30)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_OUTPUT_CHARS = 10_000
@@ -31,12 +41,66 @@ BLOCKED_PROGRAMS = {
     "shutdown",
     "sudo",
 }
-SHELL_OPERATORS = {"|", "||", "&&", ";", ">", ">>", "<", "`"}
+
+
+def discover_bash() -> Path:
+    """Find the Bash implementation used by the stable shell contract."""
+    if sys.platform == "win32":
+        roots = [
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ]
+        candidates = []
+        for root in filter(None, roots):
+            base = Path(root)
+            candidates.extend(
+                (
+                    base / "Git" / "bin" / "bash.exe",
+                    base / "Programs" / "Git" / "bin" / "bash.exe",
+                )
+            )
+        candidates.extend(
+            Path(path)
+            for path in filter(
+                None, [shutil.which("bash.exe"), shutil.which("bash")]
+            )
+        )
+    else:
+        candidates = [Path("/bin/bash")]
+
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise ShellUnavailableError("Bash is unavailable on this system")
+
+
+def _validate_command(command: str, cwd: Path) -> None:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>()")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError as exc:
+        raise ShellExecutionError(f"Invalid Bash command: {exc}") from exc
+    if not tokens:
+        raise ShellExecutionError("Bash command must not be empty")
+    blocked = {Path(token).name.casefold() for token in tokens} & BLOCKED_PROGRAMS
+    if blocked:
+        raise ToolSandboxError(
+            f"program is blocked by the shell safety policy: {sorted(blocked)[0]}",
+            "shell",
+            cwd,
+        )
 
 
 class ShellTool(Tool):
     name = "shell"
-    description = "在项目目录内执行单个安全命令，返回 exit_code、stdout 和 stderr。"
+    description = (
+        "Execute Bash commands inside the Cortex workspace. "
+        "The command language is Bash/POSIX even when Cortex runs on Windows. "
+        "Common commands: pwd, ls, cat, grep, find, git, python, pytest."
+    )
     input_model = ShellInput
     permission = Permission.EXECUTE
     timeout = DEFAULT_TIMEOUT_SECONDS
@@ -47,46 +111,37 @@ class ShellTool(Tool):
         cwd = (PROJECT_ROOT / (input.cwd or ".")).resolve()
         if not cwd.is_relative_to(PROJECT_ROOT) or not cwd.is_dir():
             raise ToolSandboxError(
-                "cwd must be an existing directory inside the project", "shell", cwd
+                "cwd must be an existing directory inside the Cortex workspace",
+                "shell",
+                cwd,
             )
-
-        argv = shlex.split(input.command)
-        if not argv:
-            raise ValueError("command must not be empty")
-        program = Path(argv[0]).name.lower()
-        if program in BLOCKED_PROGRAMS or any(
-            token in SHELL_OPERATORS for token in argv
-        ):
-            raise ToolSandboxError(
-                "command is not allowed by the shell safety policy", "shell", cwd
-            )
+        _validate_command(input.command, cwd)
+        bash = discover_bash()
 
         try:
             completed = subprocess.run(
-                argv,
+                [str(bash), "-lc", input.command],
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=input.timeout or DEFAULT_TIMEOUT_SECONDS,
                 check=False,
             )
-            return {
-                "exit_code": completed.returncode,
-                "stdout": completed.stdout[:MAX_OUTPUT_CHARS],
-                "stderr": completed.stderr[:MAX_OUTPUT_CHARS],
-                "truncated": len(completed.stdout) > MAX_OUTPUT_CHARS
-                or len(completed.stderr) > MAX_OUTPUT_CHARS,
-            }
         except subprocess.TimeoutExpired as exc:
-            stdout = (
-                exc.stdout.decode() if isinstance(exc.stdout, bytes) else exc.stdout
-            )
-            stderr = (
-                exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
-            )
-            return {
-                "exit_code": 124,
-                "stdout": (stdout or "")[:MAX_OUTPUT_CHARS],
-                "stderr": (stderr or "command timed out")[:MAX_OUTPUT_CHARS],
-                "truncated": False,
-            }
+            raise ToolTimeoutError(
+                f"Bash command timed out after {input.timeout or DEFAULT_TIMEOUT_SECONDS:g} seconds"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise ShellUnavailableError("Bash is unavailable on this system") from exc
+        except OSError as exc:
+            raise ShellExecutionError(f"Unable to start Bash: {exc}") from exc
+
+        return {
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout[:MAX_OUTPUT_CHARS],
+            "stderr": completed.stderr[:MAX_OUTPUT_CHARS],
+            "truncated": len(completed.stdout) > MAX_OUTPUT_CHARS
+            or len(completed.stderr) > MAX_OUTPUT_CHARS,
+        }
