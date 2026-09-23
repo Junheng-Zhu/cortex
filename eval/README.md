@@ -73,6 +73,16 @@ CI 运行失败时，GitHub Actions 会阻止对应的 Check 通过。
 
 Online Agent Eval 属于下一阶段能力，后续可以接入真实 LLM 和 GitHub Secrets。
 
+## 六项基线指标
+
+`eval/metrics.py` 从 `EvalRun` 列表聚合 Task Success Rate、Tool Selection
+Accuracy、Argument Valid Rate、Average Steps、p50/p95 Latency 和每个成功任务的
+Token 数。首批 15 个明确的小任务保存在 `eval/baseline_tasks.json`。
+
+`eval/baseline.json` 是用于验证指标管道的离线 deterministic fixture baseline，
+不是在线模型质量结论；接入带 API Key 的模型后，应使用同一任务集重新生成 online
+baseline。
+
 ## 退出码
 
 - `0`：PASS，可继续。
