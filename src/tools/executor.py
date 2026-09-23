@@ -207,6 +207,7 @@ class ToolExecutor:
                 error_type="ToolPermissionError",
                 error_message="Permission denied",
                 data=None,
+                validation_passed=None,
             )
         try:
             validated_input = self._validate(tool, arguments)
@@ -220,9 +221,11 @@ class ToolExecutor:
                 error_type="ToolValidationError",
                 error_message=str(e),
                 data=None,
+                validation_passed=False,
             )
 
         tool_result = self._execute_with_retry(tool, validated_input)
+        tool_result.validation_passed = True
         end = time.perf_counter()
         tool_result.duration_ms = int((end - start) * 1000)
         return tool_result

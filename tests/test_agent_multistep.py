@@ -47,10 +47,10 @@ class NotesExecutor:
         self.calls.append((name, arguments))
         if self.missing_first and len(self.calls) == 1:
             return ToolResult(
-                name, 1, 2, False, "ToolFileNotFoundError", "missing", None
+                name, 1, 2, False, "ToolFileNotFoundError", "missing", None, True
             )
         data = ["calendar.txt"] if name == "list_notes" else "meeting"
-        return ToolResult(name, 1, 2, True, None, None, data)
+        return ToolResult(name, 1, 2, True, None, None, data, True)
 
 
 def response(call_id=None, name=None, arguments=None, content=""):
@@ -116,6 +116,8 @@ def test_trace_contains_real_request_raw_response_and_reflection():
     ]
     assert llm_event.data["output_items"][0]["call_id"] == "c1"
     assert any(e.event_type == "reflection" for e in recorder.events)
+    action_event = next(e for e in recorder.events if e.event_type == "action")
+    assert action_event.data["validation_passed"] is True
 
 
 def test_shell_tool_restricts_cwd_and_dangerous_commands():

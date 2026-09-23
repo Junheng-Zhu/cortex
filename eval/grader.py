@@ -21,7 +21,7 @@ class DeterministicGrader:
     """Grade only facts declared by a Task, without an LLM judge."""
 
     def grade(self, task: Task, run: "EvalRun") -> GradeResult:
-        matched = run.actions[: len(task.expected_tools)] == task.expected_tools
+        matched = run.actions == task.expected_tools
         # Deliberately separate from run.success: runtime health alone does not
         # prove that the task requirements were satisfied.
         task_success = matched and run.success == task.expected_success

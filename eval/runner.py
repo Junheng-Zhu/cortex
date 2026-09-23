@@ -21,6 +21,7 @@ class EvalRun:
     latency_ms: float
     llm_latency_ms: float
     tool_duration_ms: float
+    action_events: list[dict] = field(default_factory=list)
     observations: list[dict] = field(default_factory=list)
     reflections: list[dict] = field(default_factory=list)
     llm_calls: list[dict] = field(default_factory=list)
@@ -49,14 +50,14 @@ class EvalRunner:
             events = [
                 event for event in recorder.events if event.run_id == summary.run_id
             ]
+            action_events = [e.data for e in events if e.event_type == "action"]
             result = EvalRun(
                 task_id=task.task_id,
                 run_id=summary.run_id,
                 answer=answer,
                 success=bool(summary.success),
-                actions=[
-                    e.data["tool_name"] for e in events if e.event_type == "action"
-                ],
+                actions=[event["tool_name"] for event in action_events],
+                action_events=action_events,
                 steps=summary.steps,
                 total_tokens=summary.total_tokens,
                 latency_ms=summary.latency_ms,

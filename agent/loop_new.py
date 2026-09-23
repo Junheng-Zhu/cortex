@@ -215,6 +215,9 @@ class AgentLoop:
                 state.last_tool_result, "duration_ms", measured_duration_ms
             ),
             attempts=getattr(state.last_tool_result, "attempts", 1),
+            validation_passed=getattr(
+                state.last_tool_result, "validation_passed", None
+            ),
             error_type=getattr(
                 state.last_tool_result,
                 "error_type",
