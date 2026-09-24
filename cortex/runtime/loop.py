@@ -13,6 +13,8 @@ from cortex.observability.tracer import RunRecorder
 from cortex.llm.protocol import LLMResponse, LLMUsage, ToolCall
 from .recovery import Reflector
 from .state import AgentPhase, AgentState
+from .session import Session, SessionConfig
+from cortex.memory.manager import MemoryManager
 
 
 class AgentLoop:
@@ -28,6 +30,9 @@ class AgentLoop:
         artifact_store: ArtifactStore | None = None,
         observation_policy: ObservationPolicy | None = None,
         context_manager: ContextManager | None = None,
+        session: Session | None = None,
+        session_config: SessionConfig | None = None,
+        memory_manager: MemoryManager | None = None,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -40,23 +45,33 @@ class AgentLoop:
             ContextMode.CLIENT_MANAGED,
         )
         self.context_mode = ContextMode(configured_context_mode)
-        self.recorder = recorder or RunRecorder()
+        self.session_config = session_config or SessionConfig(persist_trace=False)
+        self.session = session or Session.from_config(self.session_config)
+        self.recorder = recorder or RunRecorder(persist=self.session_config.persist_trace)
         self.reflector = Reflector()
         self.artifact_store = artifact_store or ArtifactStore()
         self.observation_policy = observation_policy or ObservationPolicy(
             self.artifact_store
         )
-        self.context_manager = context_manager or ContextManager()
+        self.context_manager = context_manager or ContextManager(memory_manager=memory_manager)
+        if memory_manager is not None and self.context_manager.memory_manager is None:
+            self.context_manager.memory_manager = memory_manager
         self.last_state: AgentState | None = None
 
     def run(self, query: str) -> str | None:
-        self.recorder.start_run()
+        run = self.recorder.start_run()
         started = time.perf_counter()
         state = AgentState(
+            run_id=run.run_id,
+            session_id=self.session.session_id,
             max_steps=self.max_steps,
             pending_input=[{"role": "user", "content": query}],
+            context_history=list(self.session.history),
+            previous_response_id=self.session.previous_response_id,
+            compact_summary=self.session.compact_summary,
             current_goal=query,
         )
+        self.session.last_run_id = run.run_id
         self.last_state = state
         while state.phase is not AgentPhase.FINAL:
             self.step(state)
@@ -67,6 +82,11 @@ class AgentLoop:
             latency_ms=(time.perf_counter() - started) * 1000,
             termination_reason=getattr(state, "_termination_reason", "unknown"),
         )
+        self.session.compact_summary = state.compact_summary
+        self.session.history = list(state.context_history)
+        for artifact_ref in state.artifact_references:
+            if artifact_ref not in self.session.artifact_refs:
+                self.session.artifact_refs.append(artifact_ref)
         return state.final_answer
 
     def step(self, state: AgentState) -> AgentState:
@@ -104,13 +124,13 @@ class AgentLoop:
             not state.pending_input
             and state.messages
             and not state.context_history
-            and state.previous_response_id is None
+            and self.session.previous_response_id is None
             and not state.actions
         ):
             state.pending_input = list(state.messages)
 
         request_input, previous_response_id = self.context_manager.build_context(
-            state, self.context_mode
+            state, self.context_mode, self.session
         )
 
         request_tools = self.executor.list_tool_schemas()
@@ -145,9 +165,11 @@ class AgentLoop:
             duration_ms=duration_ms,
         )
         if self.context_mode is ContextMode.SERVER_MANAGED:
+            self.session.previous_response_id = normalized.response_id
             state.previous_response_id = normalized.response_id
         else:
-            state.context_history = [*request_input, *normalized.output_items]
+            durable_input = [item for item in request_input if item.get("name") != "cortex_memory"]
+            state.context_history = [*durable_input, *normalized.output_items]
         state.pending_input.clear()
         return normalized
 
