@@ -20,9 +20,13 @@ Phase = AgentPhase
 
 @dataclass
 class AgentState:
+    run_id: str = ""
+    session_id: str = ""
     phase: AgentPhase = AgentPhase.DECIDE
     pending_input: list[dict[str, Any]] = field(default_factory=list)
     context_history: list[dict[str, Any]] = field(default_factory=list)
+    # A read-only snapshot for diagnostics/backwards compatibility. Session owns
+    # and updates the actual provider conversation cursor.
     previous_response_id: str | None = None
     # Temporary compatibility surface for callers still constructing messages.
     messages: list[dict[str, Any]] = field(default_factory=list)

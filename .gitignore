@@ -8,3 +8,4 @@ __pycache__/
 .trace.db
 eval/online_baseline.json
 eval/raw/
+.cortex/*.db
