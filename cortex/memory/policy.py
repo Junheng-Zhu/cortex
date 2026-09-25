@@ -33,12 +33,19 @@ class MemoryWritePolicy:
     }
 
     def evaluate(self, candidate: MemoryCandidate) -> MemoryDecision:
-        source = candidate.source.casefold().strip()
-        if source in self.denied_sources or source.startswith(("pytest", "eval", "trace")):
+        source = candidate.source.casefold().strip().replace("-", "_").replace(":", "_")
+        if any(denied in source for denied in self.denied_sources):
             return MemoryDecision.DENY
         if candidate.kind not in self.allowed_kinds:
             return MemoryDecision.DENY
         if not candidate.content.strip():
+            return MemoryDecision.DENY
+        content = candidate.content.casefold()
+        noise_markers = (
+            "traceback (most recent call last)", "pytest", "short test summary info",
+            "stdout:", "stderr:", "tokens used", "latency_ms", "git diff",
+        )
+        if any(marker in content for marker in noise_markers):
             return MemoryDecision.DENY
         return MemoryDecision.ALLOW
 

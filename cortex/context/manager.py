@@ -3,7 +3,9 @@ from typing import Any
 
 from cortex.llm.capabilities import ContextMode
 from cortex.memory.manager import MemoryManager
+from cortex.memory.retrieval_gate import MemoryRetrievalGate
 from cortex.memory.scopes import MemoryScope
+from cortex.memory.session_store import SessionStore
 
 from .compaction import ContextCompactor
 from .budget import ContextBudget
@@ -16,6 +18,8 @@ class ContextManager:
     max_chars: int = 60_000
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
     memory_manager: MemoryManager | None = None
+    session_store: SessionStore | None = None
+    retrieval_gate: MemoryRetrievalGate = field(default_factory=MemoryRetrievalGate)
     memory_limit: int = 3
 
     def build_context(
@@ -32,32 +36,56 @@ class ContextManager:
         items = [*memory_context, *state.context_history, *state.pending_input]
         if ContextBudget(self.max_chars).exceeded(items):
             summary = session.compact_summary if session is not None else state.compact_summary
-            items, summary = self.compactor.compact(
-                items, summary
-            )
+            items, summary = self.compactor.compact(items, summary, self._structure(state))
             state.compact_summary = summary
             if session is not None:
                 session.compact_summary = summary
         return items, None
 
     def _memory_context(self, state: Any, session: Any | None) -> list[dict[str, Any]]:
-        if self.memory_manager is None or session is None or session.temporary_chat:
+        if session is None or session.temporary_chat:
             return []
         user_items = [item for item in state.pending_input if item.get("role") == "user"]
         if not user_items:
             return []
         query = " ".join(str(item.get("content", "")) for item in user_items)
-        scopes = [(MemoryScope.SESSION.value, session.session_id)]
-        for scope, key in ((MemoryScope.USER.value, "user_id"), (MemoryScope.PROJECT.value, "project_id")):
-            if session.metadata.get(key):
-                scopes.append((scope, str(session.metadata[key])))
-        records = []
-        for scope_type, scope_id in scopes:
-            records.extend(self.memory_manager.recall(query, scope_type, scope_id, self.memory_limit))
-        records = records[: self.memory_limit]
-        if not records:
+        plan = self.retrieval_gate.plan(query)
+        snippets: list[str] = []
+        if plan.search_episodic and self.session_store is not None:
+            events = self.session_store.search(
+                query,
+                self.memory_limit,
+                user_id=(str(session.metadata["user_id"]) if "user_id" in session.metadata else None),
+                project_id=(str(session.metadata["project_id"]) if "project_id" in session.metadata else None),
+            )
+            snippets.extend(
+                f"Episodic ({event.event_type}, session {event.session_id}): {event.content}"
+                for event in events
+            )
+        if self.memory_manager is not None:
+            for scope in plan.semantic_scopes:
+                key = "user_id" if scope is MemoryScope.USER else "project_id"
+                scope_id = str(session.metadata.get(key, "default"))
+                records = self.memory_manager.recall(query, scope.value, scope_id, self.memory_limit)
+                snippets.extend(f"Semantic ({scope.value}): {record.content}" for record in records)
+        snippets = snippets[: self.memory_limit]
+        if not snippets:
             return []
         content = "Relevant long-term memory (use only when applicable):\n" + "\n".join(
-            f"- {record.content}" for record in records
+            f"- {snippet}" for snippet in snippets
         )
         return [{"role": "system", "content": content, "name": "cortex_memory"}]
+
+    @staticmethod
+    def _structure(state: Any) -> dict[str, Any]:
+        actions = getattr(state, "actions", [])
+        observations = getattr(state, "observations", [])
+        pending_actions = getattr(state, "pending_actions", [])
+        return {
+            "goal": getattr(state, "current_goal", None),
+            "completed": [action.tool_name for action in actions if action.status == "SUCCEEDED"],
+            "decisions": getattr(state, "important_decisions", []),
+            "important_files": getattr(state, "artifact_references", []),
+            "errors": [observation.error for observation in observations if observation.error],
+            "pending": [action.tool_name for action in pending_actions],
+        }

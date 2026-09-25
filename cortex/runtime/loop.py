@@ -15,6 +15,9 @@ from .recovery import Reflector
 from .state import AgentPhase, AgentState
 from .session import Session, SessionConfig
 from cortex.memory.manager import MemoryManager
+from cortex.memory.consolidation import MemoryConsolidator, ScopedMemoryCandidate
+from cortex.memory.session_store import SessionEvent, SessionStore
+from .checkpoint import Checkpoint, CheckpointStore
 
 
 class AgentLoop:
@@ -33,6 +36,9 @@ class AgentLoop:
         session: Session | None = None,
         session_config: SessionConfig | None = None,
         memory_manager: MemoryManager | None = None,
+        session_store: SessionStore | None = None,
+        checkpoint_store: CheckpointStore | None = None,
+        consolidator: MemoryConsolidator | None = None,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -47,15 +53,23 @@ class AgentLoop:
         self.context_mode = ContextMode(configured_context_mode)
         self.session_config = session_config or SessionConfig(persist_trace=False)
         self.session = session or Session.from_config(self.session_config)
+        self.memory_manager = memory_manager
+        self.session_store = session_store
+        self.checkpoint_store = checkpoint_store
+        self.consolidator = consolidator or MemoryConsolidator()
         self.recorder = recorder or RunRecorder(persist=self.session_config.persist_trace)
         self.reflector = Reflector()
         self.artifact_store = artifact_store or ArtifactStore()
         self.observation_policy = observation_policy or ObservationPolicy(
             self.artifact_store
         )
-        self.context_manager = context_manager or ContextManager(memory_manager=memory_manager)
+        self.context_manager = context_manager or ContextManager(
+            memory_manager=memory_manager, session_store=session_store
+        )
         if memory_manager is not None and self.context_manager.memory_manager is None:
             self.context_manager.memory_manager = memory_manager
+        if session_store is not None and self.context_manager.session_store is None:
+            self.context_manager.session_store = session_store
         self.last_state: AgentState | None = None
 
     def run(self, query: str) -> str | None:
@@ -73,6 +87,8 @@ class AgentLoop:
         )
         self.session.last_run_id = run.run_id
         self.last_state = state
+        self._begin_episode(query, state)
+        self._remember_candidates(self.consolidator.explicit(query, self.session.metadata), state)
         while state.phase is not AgentPhase.FINAL:
             self.step(state)
         # _finish owns semantic completion; run() owns wall-clock accounting.
@@ -87,7 +103,119 @@ class AgentLoop:
         for artifact_ref in state.artifact_references:
             if artifact_ref not in self.session.artifact_refs:
                 self.session.artifact_refs.append(artifact_ref)
+        self._persist_episode(state)
+        self._remember_candidates(
+            self.consolidator.after_run(
+                query,
+                state.final_answer or "",
+                state.important_decisions,
+                self.session.metadata,
+            ),
+            state,
+        )
         return state.final_answer
+
+    def resume(self, checkpoint_id: str | None = None) -> str | None:
+        if self.checkpoint_store is None:
+            raise RuntimeError("checkpoint_store is not configured")
+        checkpoint = (
+            self.checkpoint_store.load(checkpoint_id)
+            if checkpoint_id
+            else self.checkpoint_store.latest(self.session.session_id)
+        )
+        if checkpoint is None:
+            raise KeyError("checkpoint not found")
+        if checkpoint.session_id != self.session.session_id:
+            raise ValueError("checkpoint belongs to a different session")
+        run = self.recorder.start_run()
+        started = time.perf_counter()
+        state = checkpoint.restore(new_run_id=run.run_id, max_steps=self.max_steps)
+        state.context_history = list(self.session.history)
+        state.compact_summary = self.session.compact_summary
+        state.previous_response_id = self.session.previous_response_id
+        if not state.pending_actions:
+            state.pending_input = [{"role": "user", "content": f"Continue the task: {state.current_goal}"}]
+        self.session.last_run_id = run.run_id
+        self.last_state = state
+        while state.phase is not AgentPhase.FINAL:
+            self.step(state)
+        self.recorder.finish_run(
+            success=getattr(state, "_run_success", False),
+            steps=state.step_count,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            termination_reason=getattr(state, "_termination_reason", "unknown"),
+        )
+        self.session.history = list(state.context_history)
+        self.session.compact_summary = state.compact_summary
+        self._persist_episode(state)
+        self._remember_candidates(
+            self.consolidator.after_run(
+                state.current_goal or "",
+                state.final_answer or "",
+                state.important_decisions,
+                self.session.metadata,
+            ),
+            state,
+        )
+        return state.final_answer
+
+    def _remember_candidates(
+        self, candidates: list[ScopedMemoryCandidate], state: AgentState
+    ) -> None:
+        if self.memory_manager is None:
+            return
+        for scoped in candidates:
+            candidate = scoped.candidate
+            self.memory_manager.remember(
+                candidate.content,
+                scoped.scope_type,
+                scoped.scope_id,
+                kind=candidate.kind,
+                source=candidate.source,
+                session_id=self.session.session_id,
+                run_id=state.run_id,
+                temporary_chat=self.session.temporary_chat,
+            )
+
+    def _persist_episode(self, state: AgentState) -> None:
+        if self.session.temporary_chat or self.session_store is None:
+            return
+        if state.final_answer:
+            self.session_store.append(
+                SessionEvent(
+                    self.session.session_id,
+                    state.run_id,
+                    "assistant",
+                    state.final_answer,
+                    metadata=self._episode_metadata(),
+                )
+            )
+        self.session_store.save(self.session)
+
+    def _begin_episode(self, query: str, state: AgentState) -> None:
+        if self.session.temporary_chat or self.session_store is None:
+            return
+        self.session_store.append(
+            SessionEvent(
+                self.session.session_id,
+                state.run_id,
+                "user",
+                query,
+                metadata=self._episode_metadata(),
+            )
+        )
+        self.session_store.save(self.session)
+
+    def _episode_metadata(self, **values: Any) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "user_id": self.session.metadata.get("user_id"),
+                "project_id": self.session.metadata.get("project_id"),
+                **values,
+            }.items()
+            if value is not None
+        }
 
     def step(self, state: AgentState) -> AgentState:
         if state.phase is AgentPhase.DECIDE:
@@ -311,6 +439,24 @@ class AgentLoop:
             error_type=observation.error_type,
         )
         state.phase = AgentPhase.REFLECT
+        if not self.session.temporary_chat and self.session_store is not None:
+            self.session_store.append(
+                SessionEvent(
+                    self.session.session_id,
+                    state.run_id,
+                    "tool",
+                    action.tool_name,
+                    metadata=self._episode_metadata(
+                        status=action.status,
+                        artifact_ref=observation.artifact_ref,
+                    ),
+                )
+            )
+            self.session.history = list(state.context_history)
+            self.session.compact_summary = state.compact_summary
+            self.session_store.save(self.session)
+        if not self.session.temporary_chat and self.checkpoint_store is not None:
+            self.checkpoint_store.save(Checkpoint.capture(state))
 
     def reflect(self, state: AgentState) -> None:
         reflection = self.reflector.reflect(state.observations[-1])

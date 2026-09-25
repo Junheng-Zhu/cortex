@@ -10,6 +10,8 @@ from cortex.tools.builtin.shell import ShellTool
 
 from cortex.llm.client import LLMClient
 from cortex.memory import MemoryManager, SQLiteMemoryStore
+from cortex.memory.session_store import SessionStore, SQLiteSessionStore
+from cortex.runtime.checkpoint import CheckpointStore, SQLiteCheckpointStore
 from cortex.runtime.session import Session, SessionConfig
 
 
@@ -21,6 +23,9 @@ def build_agent(
     session: Session | None = None,
     session_config: SessionConfig | None = None,
     memory_manager: MemoryManager | None = None,
+    session_store: SessionStore | None = None,
+    checkpoint_store: CheckpointStore | None = None,
+    session_id: str | None = None,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -38,6 +43,11 @@ def build_agent(
         registry,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore())
+    episodic_store = session_store or SQLiteSessionStore()
+    if session is None and session_id is not None:
+        session = episodic_store.load(session_id)
+        if session is None:
+            raise KeyError(f"session not found: {session_id}")
     return AgentLoop(
         llm=client,
         executor=executor,
@@ -47,6 +57,8 @@ def build_agent(
         session=session,
         session_config=session_config,
         memory_manager=durable_memory,
+        session_store=episodic_store,
+        checkpoint_store=checkpoint_store or SQLiteCheckpointStore(),
     )
 
 
