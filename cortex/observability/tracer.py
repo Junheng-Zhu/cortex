@@ -8,7 +8,7 @@ from uuid import uuid4
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / ".trace.db"
+DB_PATH = PROJECT_ROOT / ".cortex" / "trace.db"
 SENSITIVE_KEYS = {"api_key", "authorization", "cookie", "password", "secret", "token"}
 MAX_TRACE_STRING = 2_000
 MAX_TRACE_ITEMS = 50
@@ -147,6 +147,7 @@ class RunRecorder:
 
 
 def init_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS traces (
