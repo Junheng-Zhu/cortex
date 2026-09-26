@@ -119,6 +119,6 @@ def test_compaction_reinserts_whole_core_and_checkpoint_version(tmp_path):
     checkpoint = Checkpoint.capture(state)
     restored = checkpoint.restore(new_run_id="r", max_steps=3)
     assert restored.skill_versions == state.skill_versions
-    missing = SkillRegistry([tmp_path]); missing.scan(); missing._versions.clear()
-    with pytest.raises(SkillVersionMissingError):
-        missing.get(item.skill_id, item.content_hash)
+    restarted = SkillRegistry([tmp_path], snapshot_root=skills.snapshot_root); restarted.scan(); restarted._versions.clear()
+    # V2 persists content-addressed snapshots, so a process-local cache miss is recoverable.
+    assert restarted.get(item.skill_id, item.content_hash).body == item.body

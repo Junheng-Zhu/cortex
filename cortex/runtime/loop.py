@@ -144,12 +144,14 @@ class AgentLoop:
                 package = self.skill_registry.get(identifier)
                 state.skill_versions[package.skill_id] = package.content_hash
                 state.skill_bodies[package.skill_id] = package.body
-                state.skill_disclosed.add(package.skill_id)
+                state.skill_pending_disclosures.add(f"{package.skill_id}@{package.content_hash}")
             self.recorder.record("skill_selection", mode="explicit", selected=list(state.skill_versions), versions=dict(state.skill_versions), loaded_chars=sum(map(len, state.skill_bodies.values())))
             return
-        candidates = self.skill_index.search(query, self.skill_candidate_limit) if self.skill_index else []
+        candidates = self.skill_index.search(query, self.skill_candidate_limit * 2) if self.skill_index else []
+        candidates = [candidate for candidate in candidates if not self.skill_registry.get(candidate.skill_id, candidate.content_hash).disable_model_invocation][:self.skill_candidate_limit]
         state.skill_candidates = [item.as_dict() for item in candidates]
-        self.recorder.record("skill_retrieval", enabled=True, query=query, candidates=state.skill_candidates, local_search_number=1, duration_ms=(time.perf_counter() - started) * 1000)
+        state.skill_local_queries = 1
+        self.recorder.record("skill_retrieval", enabled=True, query=query, candidates=state.skill_candidates, local_search_number=1, extra_llm_requests=0, index_version=getattr(self.skill_index, "index_version", None), retrieval=getattr(self.skill_index, "last_status", {}), duration_ms=(time.perf_counter() - started) * 1000)
 
     def resume(self, checkpoint_id: str | None = None) -> str | None:
         if self.checkpoint_store is None:
@@ -169,17 +171,22 @@ class AgentLoop:
         if state.skill_versions:
             if self.skill_registry is None:
                 raise RuntimeError("checkpoint contains Skills but no Skill registry is configured")
+            if Permission.SKILL_LOAD not in self.executor.allowed_permissions:
+                raise PermissionError("checkpoint Skill restore requires SKILL_LOAD permission")
             for skill_id, version in state.skill_versions.items():
                 package = self.skill_registry.get(skill_id, version)
                 state.skill_bodies[skill_id] = package.body
-                state.skill_disclosed.add(skill_id)
-            if self.context_mode is ContextMode.SERVER_MANAGED:
-                # The resumed provider cursor owns the prior disclosure.
-                state.skill_context_sent = True
-        state.context_history = list(self.session.history)
+                ref = f"{skill_id}@{version}"
+                # An accepted server disclosure is trusted only with the exact
+                # durable provider cursor. Otherwise rebuild it from snapshot.
+                if self.context_mode is not ContextMode.SERVER_MANAGED or not self.session.previous_response_id:
+                    state.skill_pending_disclosures.add(ref)
+                    state.skill_accepted_disclosures.discard(ref)
+        if not state.context_history:
+            state.context_history = list(self.session.history)
         state.compact_summary = self.session.compact_summary
         state.previous_response_id = self.session.previous_response_id
-        if not state.pending_actions:
+        if not state.pending_actions and not state.pending_input:
             state.pending_input = [{"role": "user", "content": f"Continue the task: {state.current_goal}"}]
         self.session.last_run_id = run.run_id
         self.last_state = state
@@ -284,7 +291,7 @@ class AgentLoop:
     ) -> None:
         state.final_answer = answer
         if self.skills_enabled and self.skill_registry is not None:
-            self.recorder.record("skill_outcome", searched=bool(state.skill_candidates or state.skill_searches), selected=list(state.skill_versions), versions=dict(state.skill_versions))
+            self.recorder.record("skill_outcome", searched=bool(state.skill_local_queries), selected=list(state.skill_versions), versions=dict(state.skill_versions), local_queries=state.skill_local_queries, extra_llm_requests=state.skill_extra_llm_requests, accepted_disclosures=sorted(state.skill_accepted_disclosures))
         state.phase = AgentPhase.FINAL
         state._termination_reason = termination_reason
         state._run_success = success
@@ -311,17 +318,14 @@ class AgentLoop:
 
         request_tools = self.executor.list_tool_schemas()
         started = time.perf_counter()
-        if hasattr(self.llm, "respond"):
-            response = self.llm.respond(
-                input=request_input,
-                tools=request_tools,
-                previous_response_id=previous_response_id,
-            )
-        else:
-            response = self.llm.chat(
-                request_input,
-                request_tools,
-            )
+        try:
+            if hasattr(self.llm, "respond"):
+                response = self.llm.respond(input=request_input, tools=request_tools, previous_response_id=previous_response_id)
+            else:
+                response = self.llm.chat(request_input, request_tools)
+        except Exception as exc:
+            self.recorder.record("llm_error", session_id=self.session.session_id, pending_skill_versions=sorted(state.skill_request_disclosures), duration_ms=(time.perf_counter() - started) * 1000, error_type=type(exc).__name__, reason=str(exc))
+            raise
         normalized = self._normalize_response(response)
         duration_ms = (time.perf_counter() - started) * 1000
 
@@ -341,6 +345,19 @@ class AgentLoop:
             total_tokens=normalized.usage.total_tokens,
             duration_ms=duration_ms,
         )
+        reliable_server_acceptance = self.context_mode is not ContextMode.SERVER_MANAGED or bool(normalized.response_id)
+        if reliable_server_acceptance:
+            accepted = set(state.skill_request_disclosures)
+            state.skill_accepted_disclosures.update(accepted)
+            state.skill_pending_disclosures.difference_update(accepted)
+            if any(item.get("name") == "cortex_skill_candidates" for item in request_input):
+                state.skill_candidates_accepted = True
+            if accepted:
+                call_ids = [item.get("call_id") for item in state.pending_input if item.get("type") == "function_call_output"]
+                self.recorder.record("skill_disclosure", call_ids=call_ids, versions=sorted(accepted), disclosed_chars=sum(len(state.skill_bodies.get(ref.rsplit("@", 1)[0], "")) for ref in accepted), accepted=True)
+        if state.skill_supplemental_pending:
+            state.skill_extra_llm_requests += 1
+            state.skill_supplemental_pending = False
         if self.context_mode is ContextMode.SERVER_MANAGED:
             self.session.previous_response_id = normalized.response_id
             state.previous_response_id = normalized.response_id
@@ -410,8 +427,17 @@ class AgentLoop:
                 raise RuntimeError("supplemental skill search budget exhausted")
             if action.tool_name == "skill_read_resource" and action.arguments.get("skill_id") not in state.skill_versions:
                 raise PermissionError("Skill resources may only be read after the core Skill is loaded")
+            if action.tool_name == "skill_read_resource":
+                arguments = dict(action.arguments)
+                selected_version = state.skill_versions[action.arguments["skill_id"]]
+                requested_version = arguments.get("content_hash")
+                if requested_version not in (None, selected_version):
+                    raise PermissionError("resource version must match the selected Skill version")
+                arguments["content_hash"] = selected_version
+            else:
+                arguments = action.arguments
             state.last_tool_result = self.executor.execute(
-                action.tool_name, action.arguments
+                action.tool_name, arguments
             )
             action.status = "SUCCEEDED" if state.last_tool_result.success else "FAILED"
         except Exception as exc:
@@ -524,19 +550,20 @@ class AgentLoop:
             return
         if tool_name == "skill_search":
             state.skill_searches += 1
+            state.skill_local_queries += 1
+            state.skill_supplemental_pending = True
             state.skill_candidates = list(data.get("candidates", []))
-            self.recorder.record("skill_retrieval", enabled=True, query=data.get("query"), candidates=state.skill_candidates, local_search_number=state.skill_searches + 1, supplemental=True)
+            self.recorder.record("skill_retrieval", enabled=True, query=data.get("query"), candidates=state.skill_candidates, local_search_number=state.skill_local_queries, extra_llm_requests=state.skill_extra_llm_requests, supplemental=True, index_version=data.get("index_version"), retrieval=data.get("retrieval", {}))
         elif tool_name == "skill_load":
             skill_id, version = data["skill_id"], data["content_hash"]
-            duplicate = state.skill_versions.get(skill_id) == version and skill_id in state.skill_disclosed
+            reference = f"{skill_id}@{version}"
+            duplicate = state.skill_versions.get(skill_id) == version and reference in (state.skill_pending_disclosures | state.skill_accepted_disclosures)
             state.skill_versions[skill_id] = version
             # A successful file read is not considered disclosed until the main
             # process adds the exact body to its context-owned state.
             state.skill_bodies[skill_id] = data["body"]
-            state.skill_disclosed.add(skill_id)
-            # Cause exactly one full-body injection in server-managed mode; in
-            # client-managed mode each request working set is rebuilt locally.
-            state.skill_context_sent = False
+            if reference not in state.skill_accepted_disclosures:
+                state.skill_pending_disclosures.add(reference)
             self.recorder.record("skill_selection", mode="automatic", selected=[skill_id], versions={skill_id: version}, loaded_chars=0 if duplicate else data.get("size_chars", 0), duplicate=duplicate)
         elif tool_name == "skill_read_resource":
             self.recorder.record("skill_resource", skill_id=data.get("skill_id"), version=data.get("content_hash"), path=data.get("path"), loaded_chars=data.get("size_chars", 0))

@@ -46,9 +46,18 @@ class AgentState:
     compact_summary: str = ""
     skill_candidates: list[dict[str, Any]] = field(default_factory=list)
     # File reads and model disclosure are intentionally separate states.
+    # selected -> loaded -> pending disclosure -> accepted by a successful
+    # provider request -> resident in the current client working set.
     skill_versions: dict[str, str] = field(default_factory=dict)
     skill_bodies: dict[str, str] = field(default_factory=dict, repr=False)
-    skill_disclosed: set[str] = field(default_factory=set)
+    skill_pending_disclosures: set[str] = field(default_factory=set)
+    skill_accepted_disclosures: set[str] = field(default_factory=set)
+    skill_resident: set[str] = field(default_factory=set)
+    skill_disclosed: set[str] = field(default_factory=set)  # V1 compatibility only
+    skill_request_disclosures: set[str] = field(default_factory=set, repr=False)
+    skill_candidates_accepted: bool = False
     skill_searches: int = 0
     skill_search_limit: int = 1
-    skill_context_sent: bool = False
+    skill_local_queries: int = 0
+    skill_extra_llm_requests: int = 0
+    skill_supplemental_pending: bool = False

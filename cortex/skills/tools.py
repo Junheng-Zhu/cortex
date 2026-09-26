@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from pydantic import BaseModel, Field
 
-from cortex.tools.base import Tool, ToolSandboxError
+from cortex.tools.base import Tool
 from cortex.tools.permission import Permission
 from .registry import SkillRegistry
-from .selector import BM25SkillIndex
+from .selector import SkillRetriever
 
 
 class SearchInput(BaseModel):
@@ -36,9 +35,10 @@ class SkillSearchTool(Tool):
     max_retries = 0
     timeout = 3
 
-    def __init__(self, index: BM25SkillIndex): self.index = index
+    def __init__(self, index: SkillRetriever): self.index = index
     def execute(self, value: SearchInput):
-        return {"kind": "skill_search", "query": value.query, "candidates": [c.as_dict() for c in self.index.search(value.query, value.limit)]}
+        candidates = self.index.search(value.query, value.limit)
+        return {"kind": "skill_search", "query": value.query, "candidates": [c.as_dict() for c in candidates], "index_version": self.index.index_version, "retrieval": self.index.last_status}
 
 
 class SkillLoadTool(Tool):
@@ -69,18 +69,14 @@ class SkillReadResourceTool(Tool):
         self.registry, self.max_chars = registry, max_chars
 
     def execute(self, value: ResourceInput):
-        package = self.registry.get(value.skill_id, value.content_hash)
-        relative = Path(value.path)
+        from pathlib import PurePosixPath
+        relative = PurePosixPath(value.path)
         if relative.is_absolute() or ".." in relative.parts:
-            raise ToolSandboxError("resource path escapes skill package", self.name, value.path)
-        target = (package.root / relative).resolve()
-        try:
-            target.relative_to(package.root)
-        except ValueError as exc:
-            raise ToolSandboxError("resource symlink escapes skill package", self.name, value.path) from exc
-        if not target.is_file():
-            raise FileNotFoundError(value.path)
-        content = target.read_text(encoding="utf-8")
-        if len(content) > self.max_chars:
-            raise ValueError(f"resource exceeds {self.max_chars} character budget")
-        return {"kind": "skill_resource", "skill_id": package.skill_id, "content_hash": package.content_hash, "path": relative.as_posix(), "content": content, "size_chars": len(content)}
+            raise ValueError(f"resource path escapes package: {value.path}")
+        if value.content_hash is None:
+            current = self.registry.get(value.skill_id)
+            if value.path not in current.manifest:
+                raise ValueError(f"resource path escapes or is absent from package manifest: {value.path}")
+            raise ValueError("content_hash must be bound by the runtime")
+        content = self.registry.read_resource(value.skill_id, value.content_hash, value.path, self.max_chars)
+        return {"kind": "skill_resource", "skill_id": value.skill_id, "content_hash": value.content_hash, "path": value.path, "content": content, "size_chars": len(content)}

@@ -25,6 +25,14 @@ class Checkpoint:
     artifact_refs: list[str]
     phase: str
     skill_versions: dict[str, str] = field(default_factory=dict)
+    schema_version: int = 2
+    pending_input: list[dict[str, Any]] = field(default_factory=list)
+    context_history: list[dict[str, Any]] = field(default_factory=list)
+    skill_pending_disclosures: list[str] = field(default_factory=list)
+    skill_accepted_disclosures: list[str] = field(default_factory=list)
+    skill_searches: int = 0
+    skill_search_limit: int = 1
+    skill_local_queries: int = 0
     checkpoint_id: str = field(default_factory=lambda: uuid4().hex)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -42,6 +50,13 @@ class Checkpoint:
             artifact_refs=list(state.artifact_references),
             phase=state.phase.value,
             skill_versions=dict(state.skill_versions),
+            pending_input=list(state.pending_input),
+            context_history=list(state.context_history),
+            skill_pending_disclosures=sorted(state.skill_pending_disclosures),
+            skill_accepted_disclosures=sorted(state.skill_accepted_disclosures),
+            skill_searches=state.skill_searches,
+            skill_search_limit=state.skill_search_limit,
+            skill_local_queries=state.skill_local_queries,
         )
 
     def restore(self, *, new_run_id: str, max_steps: int) -> AgentState:
@@ -61,6 +76,13 @@ class Checkpoint:
             artifact_references=list(self.artifact_refs),
             step_count=len(completed),
             skill_versions=dict(self.skill_versions),
+            pending_input=list(self.pending_input),
+            context_history=list(self.context_history),
+            skill_pending_disclosures=set(self.skill_pending_disclosures),
+            skill_accepted_disclosures=set(self.skill_accepted_disclosures),
+            skill_searches=self.skill_searches,
+            skill_search_limit=self.skill_search_limit,
+            skill_local_queries=self.skill_local_queries,
         )
 
 

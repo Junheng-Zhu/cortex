@@ -1,5 +1,15 @@
 # Cortex Eval Gate
 
+## Skill System V2
+
+离线检索评测和真实模型三组对照评测详见
+[`docs/skill-system-v2.md`](../docs/skill-system-v2.md)。提交的 smoke 结果可复现：
+
+```bash
+python eval/skill_retrieval.py --dataset eval/skill_retrieval_fixture.json \
+  --output eval/skill_retrieval_results.json
+```
+
 ## 目的
 
 把 Agent 的关键行为变成可自动检查的门禁，而不是只看“最后回答像不像”。

@@ -1,0 +1,17 @@
+{
+  "revision": "cortex-skill-e2e-2026-09-26",
+  "tasks": [
+    {
+      "task_id": "traceback_first_step",
+      "input": "According to the applicable project guidance, what should be preserved first when debugging a Python exception? Answer briefly.",
+      "skill_id": "skills:python-debugging",
+      "expected_contains": "traceback"
+    },
+    {
+      "task_id": "release_rollback",
+      "input": "According to the applicable project guidance, what operational procedure must accompany a release? Answer briefly.",
+      "skill_id": "skills:release-checklist",
+      "expected_contains": "rollback"
+    }
+  ]
+}
