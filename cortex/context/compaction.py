@@ -18,14 +18,35 @@ class ContextCompactor:
             return str(item)
 
     def compact(
-        self, items: list[dict[str, Any]], previous_summary: str = ""
+        self,
+        items: list[dict[str, Any]],
+        previous_summary: str = "",
+        structure: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
-        if len(items) <= self.recent_items:
-            return items, previous_summary
-        old, recent = items[: -self.recent_items], items[-self.recent_items :]
-        fragments = [previous_summary] if previous_summary else []
-        fragments.extend(self._text(item) for item in old)
-        summary = "\n".join(fragments)[-self.summary_chars :]
+        recent_count = min(self.recent_items, max(0, len(items) - 1))
+        if recent_count:
+            old, recent = items[:-recent_count], items[-recent_count:]
+        else:
+            old, recent = items, []
+        structure = structure or {}
+        transcript = "\n".join(self._text(item) for item in old)
+        sections = {
+            "Goal": structure.get("goal") or "Not specified",
+            "Completed": structure.get("completed") or [],
+            "Decisions": structure.get("decisions") or [],
+            "Important Files": structure.get("important_files") or [],
+            "Errors": structure.get("errors") or [],
+            "Pending": structure.get("pending") or [],
+        }
+        lines = []
+        if previous_summary:
+            lines.append(previous_summary)
+        for title, value in sections.items():
+            rendered = value if isinstance(value, str) else "; ".join(map(str, value))
+            lines.append(f"{title}: {rendered or 'None'}")
+        prefix = "\n".join(lines) + "\nEarlier Context: "
+        remaining = max(0, self.summary_chars - len(prefix))
+        summary = prefix + transcript[-remaining:] if remaining else prefix[: self.summary_chars]
         summary_item = {
             "role": "system",
             "content": "Compact summary of earlier session context:\n" + summary,
