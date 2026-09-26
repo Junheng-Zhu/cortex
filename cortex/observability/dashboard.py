@@ -4,7 +4,7 @@ import json
 
 from flask import Flask, jsonify, render_template
 
-from .tracer import get_recent_runs, get_recent_traces
+from tracer import get_recent_runs, get_recent_traces
 
 
 app = Flask(__name__)
