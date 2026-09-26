@@ -122,6 +122,9 @@ class ShellTool(Tool):
             discover_bash, MAX_OUTPUT_CHARS, workspace=self.workspace
         )
 
+    def __init__(self, backend: ExecutionBackend | None = None):
+        self.backend = backend or LocalBackend(discover_bash, MAX_OUTPUT_CHARS)
+
     def execute(self, input: ShellInput) -> dict[str, int | str | bool]:
         cwd = (self.workspace / (input.cwd or ".")).resolve()
         if not cwd.is_relative_to(self.workspace) or not cwd.is_dir():
