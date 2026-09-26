@@ -4,7 +4,7 @@ from pathlib import Path
 from time import sleep
 from typing import List
 
-from ..base import Tool
+from ..base import ConcurrencyPolicy, Tool
 from ..base import ToolFileNotFoundError, ToolSandboxError
 from ..permission import Permission
 from pydantic import BaseModel
@@ -82,6 +82,7 @@ class ReadNoteTool(Tool):
     timeout = 5
     max_retries = 3
     retryable = True
+    concurrency_policy = ConcurrencyPolicy.PARALLEL_SAFE
 
     def execute(self, input) -> str:
 
@@ -96,6 +97,7 @@ class ListNotesTool(Tool):
     timeout = 5
     max_retries = 0
     retryable = False
+    concurrency_policy = ConcurrencyPolicy.PARALLEL_SAFE
 
     def execute(self, input) -> list[str]:
         return list_notes()

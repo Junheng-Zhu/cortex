@@ -83,6 +83,16 @@ class AgentLoop:
             self.context_manager.session_store = session_store
         self.last_state: AgentState | None = None
 
+    def close(self) -> None:
+        """Release runtime-scoped execution resources."""
+        self.executor.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.close()
+
     def run(self, query: str) -> str | None:
         run = self.recorder.start_run()
         started = time.perf_counter()
@@ -121,6 +131,53 @@ class AgentLoop:
                 query,
                 state.final_answer or "",
                 state.important_decisions,
+                self.session.metadata,
+            ),
+            state,
+        )
+        return state.final_answer
+
+    async def arun(self, query: str) -> str | None:
+        """Run the agent with concurrent policy waves for multi-tool responses.
+
+        LLM request construction remains synchronous in v1; only tool execution
+        uses structured concurrency.
+        """
+        run = self.recorder.start_run()
+        started = time.perf_counter()
+        state = AgentState(
+            run_id=run.run_id, session_id=self.session.session_id,
+            max_steps=self.max_steps,
+            pending_input=[{"role": "user", "content": query}],
+            context_history=list(self.session.history),
+            previous_response_id=self.session.previous_response_id,
+            compact_summary=self.session.compact_summary,
+            current_goal=query,
+        )
+        self.session.last_run_id = run.run_id
+        self.last_state = state
+        self._begin_episode(query, state)
+        self._prepare_skills(query, state)
+        self._remember_candidates(
+            self.consolidator.explicit(query, self.session.metadata), state
+        )
+        while state.phase is not AgentPhase.FINAL:
+            await self.astep(state)
+        self.recorder.finish_run(
+            success=getattr(state, "_run_success", False),
+            steps=state.step_count,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            termination_reason=getattr(state, "_termination_reason", "unknown"),
+        )
+        self.session.compact_summary = state.compact_summary
+        self.session.history = list(state.context_history)
+        for artifact_ref in state.artifact_references:
+            if artifact_ref not in self.session.artifact_refs:
+                self.session.artifact_refs.append(artifact_ref)
+        self._persist_episode(state)
+        self._remember_candidates(
+            self.consolidator.after_run(
+                query, state.final_answer or "", state.important_decisions,
                 self.session.metadata,
             ),
             state,
@@ -279,6 +336,14 @@ class AgentLoop:
             self.observe(state)
         elif state.phase is AgentPhase.REFLECT:
             self.reflect(state)
+        return state
+
+    async def astep(self, state: AgentState) -> AgentState:
+        """Minimal async state-machine path; LLM decisions remain synchronous."""
+        if state.phase is AgentPhase.ACT:
+            await self.aact(state)
+        else:
+            self.step(state)
         return state
 
     def _finish(
@@ -469,6 +534,62 @@ class AgentLoop:
             ),
         )
         state.phase = AgentPhase.OBSERVE
+
+    async def aact(self, state: AgentState) -> None:
+        """Execute the pending action batch without allowing workers to mutate state."""
+        if not state.pending_actions:
+            self._finish(state, "No pending action to execute.",
+                         termination_reason="no_pending_action", success=False)
+            return
+        actions = list(state.pending_actions)
+        calls = [(action.tool_name, action.arguments) for action in actions]
+        for action in actions:
+            action.status = "RUNNING"
+        results = await self.executor.aexecute_many(calls)
+        metrics = self.executor.last_batch_metrics
+        self.recorder.record("tool_batch", **metrics)
+
+        # Results are indexed by original action order, never completion order.
+        for action, result in zip(actions, results):
+            action.status = "SUCCEEDED" if result.success else "FAILED"
+            self.recorder.record(
+                "action", action_id=action.action_id, call_id=action.call_id,
+                tool_name=action.tool_name, arguments=action.arguments,
+                status=action.status, duration_ms=result.duration_ms,
+                attempts=result.attempts,
+                validation_passed=result.validation_passed,
+                error_type=result.error_type,
+                batch_id=metrics.get("batch_id"),
+            )
+        state.step_count += len(actions)
+
+        first_observation = len(state.observations)
+        for result in results:
+            state.last_tool_result = result
+            self.observe(state)
+        reflections = []
+        for observation in state.observations[first_observation:]:
+            reflection = self.reflector.reflect(observation)
+            reflections.append(reflection)
+            state.reflections.append(reflection)
+            self.recorder.record(
+                "reflection", action_id=observation.action_id,
+                status=reflection.status, summary=reflection.summary,
+                next_hint=reflection.next_hint,
+            )
+        priority = {"CONTINUE": 0, "REPLAN": 1, "ABORT": 2}
+        decisive = max(reflections, key=lambda item: priority[item.status])
+        if decisive.status == "ABORT":
+            self._finish(state, decisive.summary,
+                         termination_reason="tool_error", success=False)
+        elif decisive.status == "REPLAN":
+            state.pending_actions.clear()
+            state.phase = AgentPhase.DECIDE
+        elif state.step_count >= state.max_steps:
+            self._finish(state, "Maximum number of action steps reached.",
+                         termination_reason="max_steps", success=False)
+        else:
+            state.phase = AgentPhase.DECIDE
 
     def observe(self, state: AgentState) -> None:
         action = state.pending_actions.pop(0)
