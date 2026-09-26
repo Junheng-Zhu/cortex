@@ -66,13 +66,12 @@ class InMemorySessionStore:
         project_id: str | None = None,
     ) -> list[SessionEvent]:
         terms = _terms(query)
-        ranked = [
-            (sum(term in event.content.casefold() for term in terms), event)
+        events = [
+            event
             for event in self._events
             if _in_scope(event, user_id, project_id)
         ]
-        ranked.sort(key=lambda item: (item[0], item[1].created_at), reverse=True)
-        return [event for score, event in ranked if score > 0][:limit]
+        return _rank_events(events, terms, limit)
 
 
 class SQLiteSessionStore:
@@ -186,14 +185,15 @@ class SQLiteSessionStore:
                 f"""SELECT session_id, run_id, event_type, content, created_at, metadata
                     FROM session_events WHERE {clauses}
                     ORDER BY id DESC LIMIT ?""",
-                [*args, max(limit * 10, 50)],
+                [*args, max(limit * 100, 500)],
             ).fetchall()
         events = [_event(row) for row in rows]
-        return [
+        scoped = [
             event
             for event in events
             if _in_scope(event, user_id, project_id)
-        ][:limit]
+        ]
+        return _rank_events(scoped, terms, limit)
 
 
 def _terms(query: str) -> set[str]:
@@ -223,6 +223,24 @@ def _in_scope(
     if project_id is not None and event.metadata.get("project_id") != project_id:
         return False
     return True
+
+
+def _rank_events(
+    events: list[SessionEvent], terms: set[str], limit: int
+) -> list[SessionEvent]:
+    """Rank lexical matches, preferring user-authored historical facts."""
+    source_weights = {"user": 3, "assistant": 1, "tool": 0}
+    ranked = []
+    for event in events:
+        lexical_score = sum(term in event.content.casefold() for term in terms)
+        if lexical_score == 0:
+            continue
+        source_weight = source_weights.get(event.event_type, 0)
+        if event.metadata.get("kind") == "user_fact":
+            source_weight += 2
+        ranked.append((lexical_score, source_weight, event.created_at, event))
+    ranked.sort(key=lambda item: item[:3], reverse=True)
+    return [event for _, _, _, event in ranked[:limit]]
 
 
 def _copy_session(session: Session) -> Session:

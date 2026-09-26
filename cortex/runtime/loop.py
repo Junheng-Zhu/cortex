@@ -296,7 +296,11 @@ class AgentLoop:
             self.session.previous_response_id = normalized.response_id
             state.previous_response_id = normalized.response_id
         else:
-            durable_input = [item for item in request_input if item.get("name") != "cortex_memory"]
+            durable_input = [
+                item
+                for item in request_input
+                if not str(item.get("name", "")).startswith("cortex_memory")
+            ]
             state.context_history = [*durable_input, *normalized.output_items]
         state.pending_input.clear()
         return normalized

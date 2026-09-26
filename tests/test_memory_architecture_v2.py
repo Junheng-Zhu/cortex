@@ -61,7 +61,9 @@ def test_retrieval_gate_does_not_recall_on_unrelated_requests():
         state, ContextMode.CLIENT_MANAGED, session
     )
 
-    assert context == state.pending_input
+    assert context[-1:] == state.pending_input
+    assert context[0]["name"] == "cortex_memory_runtime"
+    assert "persistent memory capabilities" in context[0]["content"]
     assert MemoryRetrievalGate().plan("continue what we did last time").search_episodic
 
 
@@ -84,9 +86,10 @@ def test_episodic_retrieval_is_prioritized_for_history_language():
         state, ContextMode.CLIENT_MANAGED, session
     )
 
-    assert context[0]["name"] == "cortex_memory"
-    assert "Episodic" in context[0]["content"]
-    assert "blue-green" in context[0]["content"]
+    memory_item = next(item for item in context if item.get("name") == "cortex_memory")
+    assert "Episodic" in memory_item["content"]
+    assert "blue-green" in memory_item["content"]
+    assert "Do not call unrelated filesystem" in memory_item["content"]
 
 
 def test_episodic_search_is_scope_isolated():
@@ -113,6 +116,25 @@ def test_episodic_search_is_scope_isolated():
     results = store.search("previous deployment cluster", project_id="p1")
 
     assert [event.session_id for event in results] == ["mine"]
+
+
+def test_episodic_search_prefers_user_source_over_assistant_source():
+    store = InMemorySessionStore()
+    timestamp = SessionEvent("s1", "r1", "assistant", "database is SQLite").created_at
+    store.append(
+        SessionEvent(
+            "s1", "r1", "assistant", "database is SQLite", created_at=timestamp
+        )
+    )
+    store.append(
+        SessionEvent(
+            "s2", "r2", "user", "my database is Postgres", created_at=timestamp
+        )
+    )
+
+    results = store.search("database", limit=2)
+
+    assert [event.event_type for event in results] == ["user", "assistant"]
 
 
 def test_checkpoint_restore_never_requeues_completed_actions():
@@ -231,6 +253,10 @@ def test_loop_consolidates_stable_fact_and_persists_safe_tool_checkpoint():
         "tool",
         "assistant",
     ]
+    assert not any(
+        str(item.get("name", "")).startswith("cortex_memory")
+        for item in loop.last_state.context_history
+    )
 
 
 def test_temporary_loop_keeps_continuity_without_any_durable_memory():

@@ -81,8 +81,9 @@ def test_context_injects_lexical_memory_for_matching_scopes_only():
 
     context, _ = ContextManager(memory_manager=manager).build_context(state, ContextMode.CLIENT_MANAGED, session)
 
-    assert "SQLite" in context[0]["content"]
-    assert "Postgres" not in context[0]["content"]
+    memory_item = next(item for item in context if item.get("name") == "cortex_memory")
+    assert "SQLite" in memory_item["content"]
+    assert "Postgres" not in memory_item["content"]
 
 
 def test_temporary_session_does_not_recall_durable_memory():

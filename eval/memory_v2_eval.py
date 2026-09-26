@@ -35,13 +35,13 @@ def main() -> None:
     session = Session(metadata={"project_id": "cortex"})
 
     generic = _context(manager, session, "Write a haiku")
-    assert generic[0]["content"] == "Write a haiku"
+    assert generic[-1]["content"] == "Write a haiku"
 
     semantic_context = _context(manager, session, "Which project database?")
-    assert "SQLite" in semantic_context[0]["content"]
+    assert any("SQLite" in item["content"] for item in semantic_context)
 
     episodic_context = _context(manager, session, "Continue the previous blue-green migration")
-    assert "Episodic" in episodic_context[0]["content"]
+    assert any("Episodic" in item["content"] for item in episodic_context)
     print("MEMORY V2 EVAL: PASSED")
 
 
