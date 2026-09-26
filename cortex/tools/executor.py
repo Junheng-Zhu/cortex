@@ -31,19 +31,29 @@ class ExecutionOutcome:
         return type(self.error).__name__ if self.error else None
 
 
-from .base import ExecutionStrategy, Tool, ToolTimeoutError
+from .base import ConcurrencyPolicy, ExecutionStrategy, Tool, ToolTimeoutError
 from copy import deepcopy
 import time
 from pydantic import ValidationError
 import multiprocessing
+import asyncio
+import queue
+from uuid import uuid4
 
 
 class ToolExecutor:
-    def __init__(self, allowed_permissions: set, registry: ToolRegistry):
+    def __init__(
+        self, allowed_permissions: set, registry: ToolRegistry,
+        max_tool_concurrency: int = 4,
+    ):
+        if max_tool_concurrency < 1:
+            raise ValueError("max_tool_concurrency must be at least 1")
         self.registry = registry
         self.allowed_permissions = allowed_permissions
         self.timeout = 10
         self.max_retries = 5
+        self.max_tool_concurrency = max_tool_concurrency
+        self.last_batch_metrics: dict[str, Any] = {}
         # 全局的 timeout 和 max_retries
 
     # def execute(self,tool_name,**kwargs):
@@ -287,3 +297,128 @@ class ToolExecutor:
         end = time.perf_counter()
         tool_result.duration_ms = int((end - start) * 1000)
         return tool_result
+
+    async def aexecute(self, tool_name: str, arguments) -> ToolResult:
+        """Execute one tool without blocking the event loop."""
+        start = time.perf_counter()
+        tool = self._get_tool(tool_name)
+        if not self._check_permission(tool):
+            return ToolResult(tool.name, 0, 0, False, "ToolPermissionError",
+                              "Permission denied", None, None)
+        try:
+            validated = self._apply_runtime_limits(
+                tool, self._validate(tool, arguments)
+            )
+        except ValidationError as exc:
+            return ToolResult(tool.name, 0, 0, False, "ToolValidationError",
+                              str(exc), None, False)
+        result = await self._aexecute_with_retry(tool, validated)
+        result.validation_passed = True
+        result.duration_ms = int((time.perf_counter() - start) * 1000)
+        return result
+
+    async def _aexecute_with_retry(self, tool: Tool, validated: Any) -> ToolResult:
+        attempts = 0
+        retries = min(tool.max_retries, self.max_retries)
+        while attempts <= retries:
+            attempts += 1
+            if tool.execution_strategy is ExecutionStrategy.BACKEND_SUPERVISED:
+                try:
+                    outcome = ExecutionOutcome(True, None, attempts,
+                                               await tool.aexecute(validated))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    outcome = ExecutionOutcome(False, exc, attempts, None)
+            else:
+                outcome = await self._aexecute_process(tool, validated, attempts)
+            if outcome.success or not self._should_retry(outcome, tool, attempts):
+                return self._result(tool, outcome)
+        raise AssertionError("unreachable")
+
+    async def _aexecute_process(
+        self, tool: Tool, validated: Any, attempts: int
+    ) -> ExecutionOutcome:
+        result_queue = multiprocessing.Queue()
+        process = multiprocessing.Process(
+            target=self._worker_with_queur,
+            args=(tool, validated, result_queue, attempts),
+        )
+        process.start()
+        deadline = asyncio.get_running_loop().time() + self._runtime_timeout(tool)
+        try:
+            while process.is_alive() and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            if process.is_alive():
+                process.terminate()
+                await asyncio.to_thread(process.join)
+                return ExecutionOutcome(False, ToolTimeoutError("Tool timed out"),
+                                        attempts, None)
+            await asyncio.to_thread(process.join)
+            for _ in range(100):
+                try:
+                    return result_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.001)
+            return ExecutionOutcome(False, RuntimeError("Tool worker exited without a result"),
+                                    attempts, None)
+        except asyncio.CancelledError:
+            if process.is_alive():
+                process.terminate()
+            await asyncio.to_thread(process.join)
+            raise
+        finally:
+            result_queue.close()
+            result_queue.join_thread()
+
+    async def aexecute_many(
+        self, calls: list[tuple[str, dict[str, Any]]]
+    ) -> list[ToolResult]:
+        """Execute ordered policy waves and return results in input order."""
+        batch_id = str(uuid4())
+        started = time.perf_counter()
+        results: list[ToolResult | None] = [None] * len(calls)
+        semaphore = asyncio.Semaphore(self.max_tool_concurrency)
+        active = peak = 0
+        waves: list[dict[str, Any]] = []
+
+        async def run(index: int) -> None:
+            nonlocal active, peak
+            async with semaphore:
+                active += 1
+                peak = max(peak, active)
+                try:
+                    name, arguments = calls[index]
+                    results[index] = await self.aexecute(name, arguments)
+                finally:
+                    active -= 1
+
+        index = 0
+        while index < len(calls):
+            tool = self._get_tool(calls[index][0])
+            policy = tool.concurrency_policy
+            end = index + 1
+            if policy is ConcurrencyPolicy.PARALLEL_SAFE:
+                while end < len(calls) and self._get_tool(
+                    calls[end][0]
+                ).concurrency_policy is ConcurrencyPolicy.PARALLEL_SAFE:
+                    end += 1
+            wave_started = time.perf_counter()
+            async with asyncio.TaskGroup() as group:
+                for item_index in range(index, end):
+                    group.create_task(run(item_index))
+            waves.append({
+                "wave_id": f"{batch_id}:{len(waves)}",
+                "policy": policy.value,
+                "size": end - index,
+                "duration_ms": int((time.perf_counter() - wave_started) * 1000),
+            })
+            index = end
+        self.last_batch_metrics = {
+            "batch_id": batch_id,
+            "concurrency_limit": self.max_tool_concurrency,
+            "peak_concurrency": peak,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "waves": waves,
+        }
+        return [result for result in results if result is not None]

@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from .permission import Permission
 from enum import Enum
+import asyncio
 
 
 class ExecutionStrategy(str, Enum):
@@ -9,6 +10,13 @@ class ExecutionStrategy(str, Enum):
 
     PROCESS_SUPERVISED = "process_supervised"
     BACKEND_SUPERVISED = "backend_supervised"
+
+
+class ConcurrencyPolicy(str, Enum):
+    """Whether calls to a tool may overlap with other explicitly safe calls."""
+
+    SERIAL = "serial"
+    PARALLEL_SAFE = "parallel_safe"
 
 
 class Tool(ABC):
@@ -20,9 +28,14 @@ class Tool(ABC):
     max_retries:int
     timeout:int
     execution_strategy = ExecutionStrategy.PROCESS_SUPERVISED
+    concurrency_policy = ConcurrencyPolicy.SERIAL
 
     def close(self) -> None:
         """Release runtime-owned resources held by this tool."""
+
+    async def aexecute(self, input: Any) -> Any:
+        """Async hook for backend-supervised tools."""
+        return await asyncio.to_thread(self.execute, input)
 
     @abstractmethod
     def execute(self, **kwargs) -> Any:

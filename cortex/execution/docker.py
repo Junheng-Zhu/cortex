@@ -1,6 +1,7 @@
 """A hardened, session-scoped Docker execution backend."""
 
 import concurrent.futures
+import asyncio
 import docker
 import threading
 import time
@@ -105,3 +106,14 @@ class DockerBackend(ExecutionBackend):
 
     def close(self) -> None:
         self._discard_container()
+
+    async def aexecute(self, request: ExecutionRequest) -> ExecutionResult:
+        task = asyncio.create_task(asyncio.to_thread(self.execute, request))
+        try:
+            return await task
+        except asyncio.CancelledError:
+            # Removing the container terminates the active exec and unblocks the
+            # SDK worker; never leave command ownership behind on cancellation.
+            self._discard_container()
+            task.cancel()
+            raise

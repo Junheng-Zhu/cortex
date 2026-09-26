@@ -39,6 +39,7 @@ def build_agent(
     skill_snapshot_root: str | Path | None = None,
     execution_backend: ExecutionBackend | str | None = None,
     execution_workspace: str | Path | None = None,
+    max_tool_concurrency: int = 4,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -86,6 +87,7 @@ def build_agent(
         if allowed_permissions is not None
         else set(Permission),
         registry,
+        max_tool_concurrency=max_tool_concurrency,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore())
     episodic_store = session_store or SQLiteSessionStore()

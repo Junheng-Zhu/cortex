@@ -20,7 +20,7 @@ from ..base import (
     Tool,
     ToolSandboxError,
     ToolTimeoutError,
-    ExecutionStrategy,
+    ConcurrencyPolicy, ExecutionStrategy,
 )
 from ..permission import Permission
 
@@ -113,6 +113,7 @@ class ShellTool(Tool):
     max_retries = 0
     retryable = False
     execution_strategy = ExecutionStrategy.BACKEND_SUPERVISED
+    concurrency_policy = ConcurrencyPolicy.SERIAL
 
     def __init__(
         self,
@@ -163,3 +164,25 @@ class ShellTool(Tool):
 
     def close(self) -> None:
         self.backend.close()
+
+    async def aexecute(self, input: ShellInput) -> dict[str, int | str | bool]:
+        cwd = (self.workspace / (input.cwd or ".")).resolve()
+        if not cwd.is_relative_to(self.workspace) or not cwd.is_dir():
+            raise ToolSandboxError(
+                "cwd must be an existing directory inside the Cortex workspace",
+                "shell", cwd,
+            )
+        _validate_command(input.command, cwd)
+        try:
+            result = await self.backend.aexecute(
+                ExecutionRequest(input.command, cwd.relative_to(self.workspace),
+                                 input.timeout or DEFAULT_TIMEOUT_SECONDS)
+            )
+        except ExecutionTimeoutError as exc:
+            raise ToolTimeoutError(str(exc)) from exc
+        except ExecutionUnavailableError as exc:
+            raise ShellUnavailableError(str(exc)) from exc
+        except ExecutionError as exc:
+            raise ShellExecutionError(str(exc)) from exc
+        return {"exit_code": result.exit_code, "stdout": result.stdout,
+                "stderr": result.stderr, "truncated": result.truncated}

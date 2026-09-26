@@ -1,6 +1,7 @@
 """Execution backend protocol."""
 
 from abc import ABC, abstractmethod
+import asyncio
 
 from .models import ExecutionRequest, ExecutionResult
 
@@ -12,6 +13,9 @@ class ExecutionBackend(ABC):
 
     def close(self) -> None:
         """Release session resources. Stateless backends need do nothing."""
+
+    async def aexecute(self, request: ExecutionRequest) -> ExecutionResult:
+        return await asyncio.to_thread(self.execute, request)
 
     def __enter__(self):
         return self

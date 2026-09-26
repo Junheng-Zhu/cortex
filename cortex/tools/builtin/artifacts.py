@@ -1,6 +1,6 @@
 from cortex.context.artifacts import ArtifactStore
 
-from ..base import Tool
+from ..base import ConcurrencyPolicy, Tool
 from ..permission import Permission
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,7 @@ class ReadArtifactChunkTool(Tool):
     timeout = 5
     max_retries = 0
     retryable = False
+    concurrency_policy = ConcurrencyPolicy.PARALLEL_SAFE
 
     def __init__(self, store: ArtifactStore) -> None:
         self.store = store
