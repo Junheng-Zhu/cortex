@@ -83,6 +83,16 @@ class AgentLoop:
             self.context_manager.session_store = session_store
         self.last_state: AgentState | None = None
 
+    def close(self) -> None:
+        """Release runtime-scoped execution resources."""
+        self.executor.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.close()
+
     def run(self, query: str) -> str | None:
         run = self.recorder.start_run()
         started = time.perf_counter()

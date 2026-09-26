@@ -9,12 +9,18 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from cortex.execution import (
+    ExecutionBackend, ExecutionError, ExecutionRequest, ExecutionTimeoutError,
+    ExecutionUnavailableError, LocalBackend,
+)
+
 from ..base import (
     ShellExecutionError,
     ShellUnavailableError,
     Tool,
     ToolSandboxError,
     ToolTimeoutError,
+    ExecutionStrategy,
 )
 from ..permission import Permission
 
@@ -106,42 +112,54 @@ class ShellTool(Tool):
     timeout = DEFAULT_TIMEOUT_SECONDS
     max_retries = 0
     retryable = False
+    execution_strategy = ExecutionStrategy.BACKEND_SUPERVISED
+
+    def __init__(
+        self,
+        backend: ExecutionBackend | None = None,
+        workspace: str | Path = PROJECT_ROOT,
+    ):
+        """Create a shell bound to the same workspace as its backend.
+
+        ``workspace`` is deliberately part of the tool's constructor contract:
+        the tool validates host paths, while requests sent to the backend contain
+        only workspace-relative paths.
+        """
+        self.workspace = Path(workspace).resolve()
+        self.backend = backend or LocalBackend(
+            discover_bash, MAX_OUTPUT_CHARS, workspace=self.workspace
+        )
 
     def execute(self, input: ShellInput) -> dict[str, int | str | bool]:
-        cwd = (PROJECT_ROOT / (input.cwd or ".")).resolve()
-        if not cwd.is_relative_to(PROJECT_ROOT) or not cwd.is_dir():
+        cwd = (self.workspace / (input.cwd or ".")).resolve()
+        if not cwd.is_relative_to(self.workspace) or not cwd.is_dir():
             raise ToolSandboxError(
                 "cwd must be an existing directory inside the Cortex workspace",
                 "shell",
                 cwd,
             )
         _validate_command(input.command, cwd)
-        bash = discover_bash()
-
         try:
-            completed = subprocess.run(
-                [str(bash), "-lc", input.command],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=input.timeout or DEFAULT_TIMEOUT_SECONDS,
-                check=False,
+            result = self.backend.execute(
+                ExecutionRequest(
+                    input.command,
+                    cwd.relative_to(self.workspace),
+                    input.timeout or DEFAULT_TIMEOUT_SECONDS,
+                )
             )
-        except subprocess.TimeoutExpired as exc:
-            raise ToolTimeoutError(
-                f"Bash command timed out after {input.timeout or DEFAULT_TIMEOUT_SECONDS:g} seconds"
-            ) from exc
-        except FileNotFoundError as exc:
-            raise ShellUnavailableError("Bash is unavailable on this system") from exc
-        except OSError as exc:
-            raise ShellExecutionError(f"Unable to start Bash: {exc}") from exc
+        except ExecutionTimeoutError as exc:
+            raise ToolTimeoutError(str(exc)) from exc
+        except ExecutionUnavailableError as exc:
+            raise ShellUnavailableError(str(exc)) from exc
+        except ExecutionError as exc:
+            raise ShellExecutionError(str(exc)) from exc
 
         return {
-            "exit_code": completed.returncode,
-            "stdout": completed.stdout[:MAX_OUTPUT_CHARS],
-            "stderr": completed.stderr[:MAX_OUTPUT_CHARS],
-            "truncated": len(completed.stdout) > MAX_OUTPUT_CHARS
-            or len(completed.stderr) > MAX_OUTPUT_CHARS,
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "truncated": result.truncated,
         }
+
+    def close(self) -> None:
+        self.backend.close()
