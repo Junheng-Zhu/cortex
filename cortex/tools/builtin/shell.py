@@ -115,15 +115,20 @@ class ShellTool(Tool):
     execution_strategy = ExecutionStrategy.BACKEND_SUPERVISED
 
     def __init__(
-        self, backend: ExecutionBackend | None = None, workspace: Path = PROJECT_ROOT
+        self,
+        backend: ExecutionBackend | None = None,
+        workspace: str | Path = PROJECT_ROOT,
     ):
-        self.workspace = workspace.resolve()
+        """Create a shell bound to the same workspace as its backend.
+
+        ``workspace`` is deliberately part of the tool's constructor contract:
+        the tool validates host paths, while requests sent to the backend contain
+        only workspace-relative paths.
+        """
+        self.workspace = Path(workspace).resolve()
         self.backend = backend or LocalBackend(
             discover_bash, MAX_OUTPUT_CHARS, workspace=self.workspace
         )
-
-    def __init__(self, backend: ExecutionBackend | None = None):
-        self.backend = backend or LocalBackend(discover_bash, MAX_OUTPUT_CHARS)
 
     def execute(self, input: ShellInput) -> dict[str, int | str | bool]:
         cwd = (self.workspace / (input.cwd or ".")).resolve()

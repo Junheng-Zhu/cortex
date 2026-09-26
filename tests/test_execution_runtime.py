@@ -11,6 +11,7 @@ from cortex.tools.builtin.shell import ShellInput, ShellTool
 from cortex.tools.executor import ToolExecutor
 from cortex.tools.permission import Permission
 from cortex.tools.registry import ToolRegistry
+from cortex.app.bootstrap import build_agent
 
 
 class StubBackend(ExecutionBackend):
@@ -39,6 +40,36 @@ def test_executor_keeps_backend_supervised_tool_in_owner_process(tmp_path: Path)
     result = executor.execute("shell", {"command": "echo ok"})
     assert result.success is True
     assert backend.request is not None  # mutation is visible: no multiprocessing copy
+
+
+def test_shell_constructor_stores_string_workspace_and_sends_relative_cwd(tmp_path: Path):
+    child = tmp_path / "child"
+    child.mkdir()
+    backend = StubBackend()
+    tool = ShellTool(backend, str(tmp_path))
+    result = tool.execute(ShellInput(command="pwd", cwd="child"))
+    assert result["exit_code"] == 7
+    assert tool.workspace == tmp_path.resolve()
+    assert backend.request.cwd == Path("child")
+
+
+def test_build_agent_wires_backend_and_workspace_into_shell(tmp_path: Path):
+    backend = StubBackend()
+    agent = build_agent(
+        object(),
+        skills_enabled=False,
+        execution_backend=backend,
+        execution_workspace=tmp_path,
+    )
+    try:
+        result = agent.executor.execute("shell", {"command": "pwd"})
+        assert result.success is True
+        shell = agent.executor.registry.get("shell")
+        assert shell.backend is backend
+        assert shell.workspace == tmp_path.resolve()
+        assert backend.request.cwd == Path(".")
+    finally:
+        agent.close()
 
 
 def test_local_backend_captures_and_truncates(tmp_path: Path):
