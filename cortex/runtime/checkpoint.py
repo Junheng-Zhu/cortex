@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .action import Action
+from .observation import Observation
 from .state import AgentPhase, AgentState
 
 
@@ -25,7 +26,7 @@ class Checkpoint:
     artifact_refs: list[str]
     phase: str
     skill_versions: dict[str, str] = field(default_factory=dict)
-    schema_version: int = 2
+    schema_version: int = 3
     pending_input: list[dict[str, Any]] = field(default_factory=list)
     context_history: list[dict[str, Any]] = field(default_factory=list)
     skill_pending_disclosures: list[str] = field(default_factory=list)
@@ -33,6 +34,7 @@ class Checkpoint:
     skill_searches: int = 0
     skill_search_limit: int = 1
     skill_local_queries: int = 0
+    observations: list[dict[str, Any]] = field(default_factory=list)
     checkpoint_id: str = field(default_factory=lambda: uuid4().hex)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -57,6 +59,7 @@ class Checkpoint:
             skill_searches=state.skill_searches,
             skill_search_limit=state.skill_search_limit,
             skill_local_queries=state.skill_local_queries,
+            observations=[asdict(item) for item in state.observations],
         )
 
     def restore(self, *, new_run_id: str, max_steps: int) -> AgentState:
@@ -83,6 +86,7 @@ class Checkpoint:
             skill_searches=self.skill_searches,
             skill_search_limit=self.skill_search_limit,
             skill_local_queries=self.skill_local_queries,
+            observations=[Observation(**item) for item in self.observations],
         )
 
 

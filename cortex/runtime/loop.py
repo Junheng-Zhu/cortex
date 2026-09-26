@@ -536,60 +536,96 @@ class AgentLoop:
         state.phase = AgentPhase.OBSERVE
 
     async def aact(self, state: AgentState) -> None:
-        """Execute the pending action batch without allowing workers to mutate state."""
+        """Execute, durably observe, and reflect one ordered wave at a time."""
         if not state.pending_actions:
             self._finish(state, "No pending action to execute.",
                          termination_reason="no_pending_action", success=False)
             return
-        actions = list(state.pending_actions)
-        calls = [(action.tool_name, action.arguments) for action in actions]
-        for action in actions:
-            action.status = "RUNNING"
-        results = await self.executor.aexecute_many(calls)
-        metrics = self.executor.last_batch_metrics
-        self.recorder.record("tool_batch", **metrics)
-
-        # Results are indexed by original action order, never completion order.
-        for action, result in zip(actions, results):
-            action.status = "SUCCEEDED" if result.success else "FAILED"
-            self.recorder.record(
-                "action", action_id=action.action_id, call_id=action.call_id,
-                tool_name=action.tool_name, arguments=action.arguments,
-                status=action.status, duration_ms=result.duration_ms,
-                attempts=result.attempts,
-                validation_passed=result.validation_passed,
-                error_type=result.error_type,
-                batch_id=metrics.get("batch_id"),
-            )
-        state.step_count += len(actions)
-
-        first_observation = len(state.observations)
-        for result in results:
-            state.last_tool_result = result
-            self.observe(state)
-        reflections = []
-        for observation in state.observations[first_observation:]:
-            reflection = self.reflector.reflect(observation)
-            reflections.append(reflection)
-            state.reflections.append(reflection)
-            self.recorder.record(
-                "reflection", action_id=observation.action_id,
-                status=reflection.status, summary=reflection.summary,
-                next_hint=reflection.next_hint,
-            )
-        priority = {"CONTINUE": 0, "REPLAN": 1, "ABORT": 2}
-        decisive = max(reflections, key=lambda item: priority[item.status])
-        if decisive.status == "ABORT":
-            self._finish(state, decisive.summary,
-                         termination_reason="tool_error", success=False)
-        elif decisive.status == "REPLAN":
+        remaining_steps = state.max_steps - state.step_count
+        if remaining_steps <= 0:
             state.pending_actions.clear()
-            state.phase = AgentPhase.DECIDE
-        elif state.step_count >= state.max_steps:
+            self._finish(state, "Maximum number of action steps reached.",
+                         termination_reason="max_steps", success=False)
+            return
+        all_actions = list(state.pending_actions)
+        actions = all_actions[:remaining_steps]
+        calls = [(action.tool_name, action.arguments) for action in actions]
+        stopped = False
+        batch_started = time.perf_counter()
+        committed_waves = []
+
+        async def commit_wave(indexed_results, wave) -> bool:
+            nonlocal stopped
+            committed_waves.append(dict(wave))
+            observations = []
+            for index, result in indexed_results:
+                action = actions[index]
+                # Status and observation are committed without an await between
+                # them; observe() persists both in the same checkpoint.
+                action.status = "SUCCEEDED" if result.success else "FAILED"
+                state.last_tool_result = result
+                state.step_count += 1
+                self.recorder.record(
+                    "action", action_id=action.action_id,
+                    call_id=action.call_id, tool_name=action.tool_name,
+                    arguments=action.arguments, status=action.status,
+                    duration_ms=result.duration_ms, attempts=result.attempts,
+                    validation_passed=result.validation_passed,
+                    error_type=result.error_type,
+                    batch_id=wave["wave_id"].split(":", 1)[0],
+                    wave_id=wave["wave_id"],
+                )
+                self.observe(state)
+                observations.append(state.observations[-1])
+
+            reflections = [self.reflector.reflect(item) for item in observations]
+            priority = {"CONTINUE": 0, "REPLAN": 1, "ABORT": 2}
+            decisive = max(reflections, key=lambda item: priority[item.status])
+            for observation, reflection in zip(observations, reflections):
+                state.reflections.append(reflection)
+                self.recorder.record(
+                    "reflection", action_id=observation.action_id,
+                    status=reflection.status, summary=reflection.summary,
+                    next_hint=reflection.next_hint, wave_id=wave["wave_id"],
+                )
+            if decisive.status == "ABORT":
+                state.pending_actions.clear()
+                self._finish(state, decisive.summary,
+                             termination_reason="tool_error", success=False)
+                stopped = True
+            elif decisive.status == "REPLAN":
+                state.pending_actions.clear()
+                state.phase = AgentPhase.DECIDE
+                stopped = True
+            else:
+                state.phase = AgentPhase.ACT
+            self._save_checkpoint(state)
+            return not stopped
+
+        await self.executor.aexecute_waves(calls, commit_wave)
+        batch_id = (committed_waves[0]["wave_id"].split(":", 1)[0]
+                    if committed_waves else None)
+        self.recorder.record(
+            "tool_batch", batch_id=batch_id, waves=committed_waves,
+            concurrency_limit=self.executor.max_tool_concurrency,
+            peak_concurrency=max(
+                (wave.get("peak_concurrency", 0) for wave in committed_waves),
+                default=0,
+            ),
+            duration_ms=(time.perf_counter() - batch_started) * 1000,
+        )
+        if stopped:
+            return
+        if len(all_actions) > remaining_steps or state.step_count >= state.max_steps:
+            state.pending_actions.clear()
             self._finish(state, "Maximum number of action steps reached.",
                          termination_reason="max_steps", success=False)
         else:
             state.phase = AgentPhase.DECIDE
+
+    def _save_checkpoint(self, state: AgentState) -> None:
+        if not self.session.temporary_chat and self.checkpoint_store is not None:
+            self.checkpoint_store.save(Checkpoint.capture(state))
 
     def observe(self, state: AgentState) -> None:
         action = state.pending_actions.pop(0)

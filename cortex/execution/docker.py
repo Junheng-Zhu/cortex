@@ -65,6 +65,11 @@ class DockerBackend(ExecutionBackend):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         container_cwd = self._container_cwd(request.cwd)
         container = self._get_container()
+        return self._execute_in_container(request, container, container_cwd)
+
+    def _execute_in_container(
+        self, request: ExecutionRequest, container, container_cwd: str
+    ) -> ExecutionResult:
         started = time.monotonic()
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(
@@ -74,13 +79,13 @@ class DockerBackend(ExecutionBackend):
         try:
             response = future.result(timeout=request.timeout)
         except concurrent.futures.TimeoutError as exc:
-            self._discard_container()
+            self._discard_container(container)
             executor.shutdown(wait=False, cancel_futures=True)
             raise ExecutionTimeoutError(
                 f"Docker command timed out after {request.timeout:g} seconds"
             ) from exc
         except Exception as exc:
-            self._discard_container()
+            self._discard_container(container)
             executor.shutdown(wait=False, cancel_futures=True)
             raise ExecutionError(f"Docker execution failed: {exc}") from exc
         executor.shutdown(wait=True)
@@ -95,8 +100,10 @@ class DockerBackend(ExecutionBackend):
             round((time.monotonic() - started) * 1000),
         )
 
-    def _discard_container(self) -> None:
+    def _discard_container(self, expected=None) -> None:
         with self._lock:
+            if expected is not None and self._container is not expected:
+                return
             container, self._container = self._container, None
         if container is not None:
             try:
@@ -108,12 +115,16 @@ class DockerBackend(ExecutionBackend):
         self._discard_container()
 
     async def aexecute(self, request: ExecutionRequest) -> ExecutionResult:
-        task = asyncio.create_task(asyncio.to_thread(self.execute, request))
+        container_cwd = self._container_cwd(request.cwd)
+        container = self._get_container()
+        task = asyncio.create_task(asyncio.to_thread(
+            self._execute_in_container, request, container, container_cwd
+        ))
         try:
             return await task
         except asyncio.CancelledError:
             # Removing the container terminates the active exec and unblocks the
             # SDK worker; never leave command ownership behind on cancellation.
-            self._discard_container()
+            self._discard_container(container)
             task.cancel()
             raise

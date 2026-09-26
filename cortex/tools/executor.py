@@ -39,6 +39,7 @@ import multiprocessing
 import asyncio
 import queue
 from uuid import uuid4
+from collections.abc import Awaitable, Callable
 
 
 class ToolExecutor:
@@ -54,6 +55,9 @@ class ToolExecutor:
         self.max_retries = 5
         self.max_tool_concurrency = max_tool_concurrency
         self.last_batch_metrics: dict[str, Any] = {}
+        # These are executor-owned, so concurrent batches/runs share limits.
+        self._concurrency_semaphore = asyncio.Semaphore(max_tool_concurrency)
+        self._serial_lock = asyncio.Lock()
         # 全局的 timeout 和 max_retries
 
     # def execute(self,tool_name,**kwargs):
@@ -301,7 +305,11 @@ class ToolExecutor:
     async def aexecute(self, tool_name: str, arguments) -> ToolResult:
         """Execute one tool without blocking the event loop."""
         start = time.perf_counter()
-        tool = self._get_tool(tool_name)
+        try:
+            tool = self._get_tool(tool_name)
+        except Exception as exc:
+            return ToolResult(tool_name, 0, 0, False, type(exc).__name__,
+                              str(exc), None, None)
         if not self._check_permission(tool):
             return ToolResult(tool.name, 0, 0, False, "ToolPermissionError",
                               "Permission denied", None, None)
@@ -375,44 +383,76 @@ class ToolExecutor:
         self, calls: list[tuple[str, dict[str, Any]]]
     ) -> list[ToolResult]:
         """Execute ordered policy waves and return results in input order."""
+        return await self.aexecute_waves(calls)
+
+    def _concurrency_policy(self, tool_name: str) -> ConcurrencyPolicy:
+        try:
+            return self._get_tool(tool_name).concurrency_policy
+        except Exception:
+            # Unknown calls are normalized by aexecute and act as a barrier.
+            return ConcurrencyPolicy.SERIAL
+
+    async def aexecute_waves(
+        self,
+        calls: list[tuple[str, dict[str, Any]]],
+        on_wave: Callable[[list[tuple[int, ToolResult]], dict[str, Any]],
+                          Awaitable[bool]] | None = None,
+    ) -> list[ToolResult]:
+        """Execute waves, optionally committing each before scheduling the next.
+
+        The callback runs in the owning coroutine and returns whether scheduling
+        may continue. This is the Agent's durable observe/reflect boundary.
+        """
         batch_id = str(uuid4())
         started = time.perf_counter()
         results: list[ToolResult | None] = [None] * len(calls)
-        semaphore = asyncio.Semaphore(self.max_tool_concurrency)
         active = peak = 0
         waves: list[dict[str, Any]] = []
 
-        async def run(index: int) -> None:
+        async def run(index: int, policy: ConcurrencyPolicy) -> None:
             nonlocal active, peak
-            async with semaphore:
+            async with self._concurrency_semaphore:
                 active += 1
                 peak = max(peak, active)
                 try:
                     name, arguments = calls[index]
-                    results[index] = await self.aexecute(name, arguments)
+                    if policy is ConcurrencyPolicy.SERIAL:
+                        async with self._serial_lock:
+                            results[index] = await self.aexecute(name, arguments)
+                    else:
+                        results[index] = await self.aexecute(name, arguments)
                 finally:
                     active -= 1
 
         index = 0
         while index < len(calls):
-            tool = self._get_tool(calls[index][0])
-            policy = tool.concurrency_policy
+            policy = self._concurrency_policy(calls[index][0])
             end = index + 1
             if policy is ConcurrencyPolicy.PARALLEL_SAFE:
-                while end < len(calls) and self._get_tool(
+                while end < len(calls) and self._concurrency_policy(
                     calls[end][0]
-                ).concurrency_policy is ConcurrencyPolicy.PARALLEL_SAFE:
+                ) is ConcurrencyPolicy.PARALLEL_SAFE:
                     end += 1
             wave_started = time.perf_counter()
             async with asyncio.TaskGroup() as group:
                 for item_index in range(index, end):
-                    group.create_task(run(item_index))
-            waves.append({
+                    group.create_task(run(item_index, policy))
+            wave = {
                 "wave_id": f"{batch_id}:{len(waves)}",
                 "policy": policy.value,
                 "size": end - index,
                 "duration_ms": int((time.perf_counter() - wave_started) * 1000),
-            })
+                "peak_concurrency": peak,
+            }
+            waves.append(wave)
+            if on_wave is not None:
+                wave_results = [
+                    (item_index, results[item_index])
+                    for item_index in range(index, end)
+                    if results[item_index] is not None
+                ]
+                if not await on_wave(wave_results, wave):
+                    break
             index = end
         self.last_batch_metrics = {
             "batch_id": batch_id,
