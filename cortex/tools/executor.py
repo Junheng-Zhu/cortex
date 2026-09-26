@@ -31,7 +31,7 @@ class ExecutionOutcome:
         return type(self.error).__name__ if self.error else None
 
 
-from .base import Tool, ToolTimeoutError
+from .base import ExecutionStrategy, Tool, ToolTimeoutError
 from copy import deepcopy
 import time
 from pydantic import ValidationError
@@ -177,6 +177,13 @@ class ToolExecutor:
 
         for i in range(tool_retries + 1):
             attempts += 1
+            if tool.execution_strategy is ExecutionStrategy.BACKEND_SUPERVISED:
+                outcome = self._execute_backend_supervised(tool, validated_input, attempts)
+                if outcome.success:
+                    return self._result(tool, outcome)
+                if self._should_retry(outcome, tool, attempts):
+                    continue
+                return self._result(tool, outcome)
             tool_queue = multiprocessing.Queue()
             p = multiprocessing.Process(
                 target=self._worker_with_queur,
@@ -200,28 +207,51 @@ class ToolExecutor:
             tool_queue.join_thread()
 
             if outcome.success:
-                return ToolResult(
-                    tool_name=tool.name,
-                    attempts=attempts,
-                    duration_ms=0,
-                    success=True,
-                    error_type=None,
-                    error_message=None,
-                    data=outcome.data,
-                )
+                return self._result(tool, outcome)
             else:
                 if self._should_retry(outcome, tool, attempts):
                     continue
                 else:
-                    return ToolResult(
-                        tool_name=tool.name,
-                        attempts=attempts,
-                        duration_ms=0,
-                        success=False,
-                        error_type=outcome.error_type,
-                        error_message=outcome.error_message,
-                        data=None,
-                    )
+                    return self._result(tool, outcome)
+
+    def _execute_backend_supervised(
+        self, tool: Tool, validated_input: Any, attempts: int
+    ) -> ExecutionOutcome:
+        """Execute in the owning process; the backend enforces its own deadline."""
+        try:
+            return ExecutionOutcome(True, None, attempts, tool.execute(validated_input))
+        except Exception as exc:
+            return ExecutionOutcome(False, exc, attempts, None)
+
+    @staticmethod
+    def _result(tool: Tool, outcome: ExecutionOutcome) -> ToolResult:
+        return ToolResult(
+            tool_name=tool.name,
+            attempts=outcome.attempts,
+            duration_ms=0,
+            success=outcome.success,
+            error_type=outcome.error_type,
+            error_message=outcome.error_message,
+            data=outcome.data if outcome.success else None,
+        )
+
+    def close(self) -> None:
+        """Idempotently release resources owned by registered tools."""
+        first_error = None
+        for name in self.registry.list_tools():
+            try:
+                self.registry.get(name).close()
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.close()
 
     def execute(self, tool_name: str, arguments) -> ToolResult:
         start = time.perf_counter()

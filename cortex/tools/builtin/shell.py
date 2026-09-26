@@ -20,6 +20,7 @@ from ..base import (
     Tool,
     ToolSandboxError,
     ToolTimeoutError,
+    ExecutionStrategy,
 )
 from ..permission import Permission
 
@@ -111,13 +112,22 @@ class ShellTool(Tool):
     timeout = DEFAULT_TIMEOUT_SECONDS
     max_retries = 0
     retryable = False
+    execution_strategy = ExecutionStrategy.BACKEND_SUPERVISED
+
+    def __init__(
+        self, backend: ExecutionBackend | None = None, workspace: Path = PROJECT_ROOT
+    ):
+        self.workspace = workspace.resolve()
+        self.backend = backend or LocalBackend(
+            discover_bash, MAX_OUTPUT_CHARS, workspace=self.workspace
+        )
 
     def __init__(self, backend: ExecutionBackend | None = None):
         self.backend = backend or LocalBackend(discover_bash, MAX_OUTPUT_CHARS)
 
     def execute(self, input: ShellInput) -> dict[str, int | str | bool]:
-        cwd = (PROJECT_ROOT / (input.cwd or ".")).resolve()
-        if not cwd.is_relative_to(PROJECT_ROOT) or not cwd.is_dir():
+        cwd = (self.workspace / (input.cwd or ".")).resolve()
+        if not cwd.is_relative_to(self.workspace) or not cwd.is_dir():
             raise ToolSandboxError(
                 "cwd must be an existing directory inside the Cortex workspace",
                 "shell",
@@ -126,7 +136,11 @@ class ShellTool(Tool):
         _validate_command(input.command, cwd)
         try:
             result = self.backend.execute(
-                ExecutionRequest(input.command, cwd, input.timeout or DEFAULT_TIMEOUT_SECONDS)
+                ExecutionRequest(
+                    input.command,
+                    cwd.relative_to(self.workspace),
+                    input.timeout or DEFAULT_TIMEOUT_SECONDS,
+                )
             )
         except ExecutionTimeoutError as exc:
             raise ToolTimeoutError(str(exc)) from exc
@@ -141,3 +155,6 @@ class ShellTool(Tool):
             "stderr": result.stderr,
             "truncated": result.truncated,
         }
+
+    def close(self) -> None:
+        self.backend.close()

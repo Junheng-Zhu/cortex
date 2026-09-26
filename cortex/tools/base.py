@@ -1,6 +1,14 @@
 from abc import ABC, abstractmethod
 from typing import Any
 from .permission import Permission
+from enum import Enum
+
+
+class ExecutionStrategy(str, Enum):
+    """Who owns timeout and child-resource supervision for a tool call."""
+
+    PROCESS_SUPERVISED = "process_supervised"
+    BACKEND_SUPERVISED = "backend_supervised"
 
 
 class Tool(ABC):
@@ -11,6 +19,10 @@ class Tool(ABC):
     retryable: bool
     max_retries:int
     timeout:int
+    execution_strategy = ExecutionStrategy.PROCESS_SUPERVISED
+
+    def close(self) -> None:
+        """Release runtime-owned resources held by this tool."""
 
     @abstractmethod
     def execute(self, **kwargs) -> Any:

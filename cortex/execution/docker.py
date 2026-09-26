@@ -1,6 +1,7 @@
 """A hardened, session-scoped Docker execution backend."""
 
 import concurrent.futures
+import docker
 import threading
 import time
 from pathlib import Path
@@ -24,9 +25,8 @@ class DockerBackend(ExecutionBackend):
     def _docker_client(self):
         if self._client is None:
             try:
-                import docker
                 self._client = docker.from_env()
-            except (ImportError, OSError) as exc:
+            except Exception as exc:
                 raise ExecutionUnavailableError(f"Docker is unavailable: {exc}") from exc
         return self._client
 
@@ -45,6 +45,7 @@ class DockerBackend(ExecutionBackend):
                         mem_limit=self.config.memory_limit, nano_cpus=self.config.nano_cpus,
                         pids_limit=self.config.pids_limit,
                         environment={"HOME": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin"},
+                        labels={"com.cortex.execution-runtime": "v2"},
                     )
                 except Exception as exc:
                     raise ExecutionUnavailableError(
@@ -53,20 +54,21 @@ class DockerBackend(ExecutionBackend):
             return self._container
 
     def _container_cwd(self, cwd: Path) -> str:
-        workspace = self.config.workspace.resolve()
-        try:
-            relative = cwd.resolve().relative_to(workspace)
-        except ValueError as exc:
-            raise ExecutionError("Docker cwd must be inside the configured workspace") from exc
-        return str(Path("/workspace") / relative)
+        if cwd.is_absolute() or ".." in cwd.parts:
+            raise ExecutionError("Docker cwd must be workspace-relative")
+        host_path = (self.config.workspace.resolve() / cwd).resolve()
+        if not host_path.is_relative_to(self.config.workspace.resolve()) or not host_path.is_dir():
+            raise ExecutionError("Docker cwd must be an existing workspace directory")
+        return str(Path("/workspace") / cwd)
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        container_cwd = self._container_cwd(request.cwd)
         container = self._get_container()
         started = time.monotonic()
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(
             container.exec_run, ["/bin/bash", "-lc", request.command],
-            workdir=self._container_cwd(request.cwd), demux=True,
+            workdir=container_cwd, demux=True,
         )
         try:
             response = future.result(timeout=request.timeout)

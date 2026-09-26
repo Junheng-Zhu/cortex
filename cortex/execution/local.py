@@ -11,16 +11,22 @@ from .models import ExecutionRequest, ExecutionResult
 
 
 class LocalBackend(ExecutionBackend):
-    def __init__(self, bash_resolver: Callable[[], Path], max_output_chars: int = 10_000):
+    def __init__(
+        self,
+        bash_resolver: Callable[[], Path],
+        max_output_chars: int = 10_000,
+        workspace: Path | None = None,
+    ):
         self._bash_resolver = bash_resolver
         self._max_output_chars = max_output_chars
+        self.workspace = (workspace or Path.cwd()).resolve()
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         bash = self._bash_resolver()
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                [str(bash), "-lc", request.command], cwd=request.cwd,
+                [str(bash), "-lc", request.command], cwd=self._host_cwd(request.cwd),
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=request.timeout, check=False,
             )
@@ -39,3 +45,9 @@ class LocalBackend(ExecutionBackend):
             len(stdout) > limit or len(stderr) > limit,
             round((time.monotonic() - started) * 1000),
         )
+
+    def _host_cwd(self, cwd: Path) -> Path:
+        mapped = (self.workspace / cwd).resolve()
+        if not mapped.is_relative_to(self.workspace) or not mapped.is_dir():
+            raise ExecutionError("Local cwd must be an existing workspace directory")
+        return mapped
