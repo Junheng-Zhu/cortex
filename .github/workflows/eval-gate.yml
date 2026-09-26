@@ -27,15 +27,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install test dependencies
-        run: >-
-          python -m pip install
-          "openai>=1.66.0,<3"
-          "pydantic>=2,<3"
-          "python-dotenv>=1.0"
-          "tenacity>=8.0"
-          "pytest>=8.0"
+        run: python -m pip install -r requirements.txt
 
-      - name: Run test suite
+      - name: Run offline test suite
         run: python -m pytest -q tests
 
       - name: Run deterministic Eval
