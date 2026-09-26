@@ -1,0 +1,105 @@
+"""A hardened, session-scoped Docker execution backend."""
+
+import concurrent.futures
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+from .backend import ExecutionBackend
+from .config import DockerBackendConfig
+from .exceptions import ExecutionError, ExecutionTimeoutError, ExecutionUnavailableError
+from .models import ExecutionRequest, ExecutionResult
+
+
+class DockerBackend(ExecutionBackend):
+    """Run commands in one lazily-created, disposable sandbox container."""
+
+    def __init__(self, config: DockerBackendConfig, client: Any | None = None):
+        self.config = config
+        self._client = client
+        self._container = None
+        self._lock = threading.RLock()
+
+    def _docker_client(self):
+        if self._client is None:
+            try:
+                import docker
+                self._client = docker.from_env()
+            except (ImportError, OSError) as exc:
+                raise ExecutionUnavailableError(f"Docker is unavailable: {exc}") from exc
+        return self._client
+
+    def _get_container(self):
+        with self._lock:
+            if self._container is None:
+                workspace = self.config.workspace.resolve()
+                try:
+                    self._container = self._docker_client().containers.run(
+                        self.config.image, command=["sleep", "infinity"], detach=True,
+                        working_dir="/workspace", user=self.config.user,
+                        volumes={str(workspace): {"bind": "/workspace", "mode": "rw"}},
+                        network_disabled=self.config.network_disabled, read_only=True,
+                        tmpfs=self.config.tmpfs, cap_drop=["ALL"],
+                        security_opt=["no-new-privileges:true"],
+                        mem_limit=self.config.memory_limit, nano_cpus=self.config.nano_cpus,
+                        pids_limit=self.config.pids_limit,
+                        environment={"HOME": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin"},
+                    )
+                except Exception as exc:
+                    raise ExecutionUnavailableError(
+                        f"Unable to create Docker sandbox: {exc}"
+                    ) from exc
+            return self._container
+
+    def _container_cwd(self, cwd: Path) -> str:
+        workspace = self.config.workspace.resolve()
+        try:
+            relative = cwd.resolve().relative_to(workspace)
+        except ValueError as exc:
+            raise ExecutionError("Docker cwd must be inside the configured workspace") from exc
+        return str(Path("/workspace") / relative)
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        container = self._get_container()
+        started = time.monotonic()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            container.exec_run, ["/bin/bash", "-lc", request.command],
+            workdir=self._container_cwd(request.cwd), demux=True,
+        )
+        try:
+            response = future.result(timeout=request.timeout)
+        except concurrent.futures.TimeoutError as exc:
+            self._discard_container()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise ExecutionTimeoutError(
+                f"Docker command timed out after {request.timeout:g} seconds"
+            ) from exc
+        except Exception as exc:
+            self._discard_container()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise ExecutionError(f"Docker execution failed: {exc}") from exc
+        executor.shutdown(wait=True)
+        output = response.output or (b"", b"")
+        stdout_raw, stderr_raw = output if isinstance(output, tuple) else (output, b"")
+        stdout = (stdout_raw or b"").decode("utf-8", "replace")
+        stderr = (stderr_raw or b"").decode("utf-8", "replace")
+        limit = self.config.max_output_chars
+        return ExecutionResult(
+            response.exit_code, stdout[:limit], stderr[:limit],
+            len(stdout) > limit or len(stderr) > limit,
+            round((time.monotonic() - started) * 1000),
+        )
+
+    def _discard_container(self) -> None:
+        with self._lock:
+            container, self._container = self._container, None
+        if container is not None:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        self._discard_container()
