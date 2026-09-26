@@ -1,0 +1,41 @@
+"""Host Bash execution backend."""
+
+import subprocess
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+from .backend import ExecutionBackend
+from .exceptions import ExecutionError, ExecutionTimeoutError, ExecutionUnavailableError
+from .models import ExecutionRequest, ExecutionResult
+
+
+class LocalBackend(ExecutionBackend):
+    def __init__(self, bash_resolver: Callable[[], Path], max_output_chars: int = 10_000):
+        self._bash_resolver = bash_resolver
+        self._max_output_chars = max_output_chars
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        bash = self._bash_resolver()
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                [str(bash), "-lc", request.command], cwd=request.cwd,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=request.timeout, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ExecutionTimeoutError(
+                f"Bash command timed out after {request.timeout:g} seconds"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise ExecutionUnavailableError("Bash is unavailable on this system") from exc
+        except OSError as exc:
+            raise ExecutionError(f"Unable to start Bash: {exc}") from exc
+        stdout, stderr = completed.stdout, completed.stderr
+        limit = self._max_output_chars
+        return ExecutionResult(
+            completed.returncode, stdout[:limit], stderr[:limit],
+            len(stdout) > limit or len(stderr) > limit,
+            round((time.monotonic() - started) * 1000),
+        )
