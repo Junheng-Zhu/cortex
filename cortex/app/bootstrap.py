@@ -7,6 +7,8 @@ from cortex.tools.builtin.notes import DeleteNoteTool, ListNotesTool, ReadNoteTo
 from cortex.tools.permission import Permission
 from cortex.tools.registry import ToolRegistry
 from cortex.tools.builtin.shell import ShellTool
+from cortex.execution import DockerBackend, DockerBackendConfig, ExecutionBackend, LocalBackend
+from cortex.tools.builtin.shell import discover_bash, MAX_OUTPUT_CHARS, PROJECT_ROOT
 
 from cortex.llm.client import LLMClient
 from cortex.memory import MemoryManager, SQLiteMemoryStore
@@ -35,6 +37,9 @@ def build_agent(
     skill_retriever: str = "bm25",
     skill_embedding_backend=None,
     skill_snapshot_root: str | Path | None = None,
+    execution_backend: ExecutionBackend | str | None = None,
+    execution_workspace: str | Path | None = None,
+    max_tool_concurrency: int = 4,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -43,7 +48,16 @@ def build_agent(
     registry.register(ReadNoteTool())
     registry.register(DeleteNoteTool())
     registry.register(SlowTool())
-    registry.register(ShellTool())
+    workspace = Path(execution_workspace or PROJECT_ROOT).resolve()
+    if execution_backend is None or execution_backend == "local":
+        shell_backend = LocalBackend(discover_bash, MAX_OUTPUT_CHARS, workspace)
+    elif execution_backend == "docker":
+        shell_backend = DockerBackend(DockerBackendConfig(workspace=workspace))
+    elif isinstance(execution_backend, ExecutionBackend):
+        shell_backend = execution_backend
+    else:
+        raise ValueError("execution_backend must be 'local', 'docker', or an ExecutionBackend")
+    registry.register(ShellTool(shell_backend, workspace))
     registry.register(ReadArtifactChunkTool(artifact_store))
     skill_registry = None
     skill_index = None
@@ -73,6 +87,7 @@ def build_agent(
         if allowed_permissions is not None
         else set(Permission),
         registry,
+        max_tool_concurrency=max_tool_concurrency,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore())
     episodic_store = session_store or SQLiteSessionStore()
@@ -111,10 +126,15 @@ def run_loop(
     config = SessionConfig(temporary_chat=False, persist_trace=True)
     runtime_recorder = recorder if recorder is not None else RunRecorder(persist=config.persist_trace)
     agent = build_agent(client, recorder=runtime_recorder)
-    print("Cortex 已启动（工具模式），输入 'exit' 退出。")
-    while True:
-        user_input = input("\n你: ")
-        if user_input.strip().lower() in {"exit", "quit", "q"}:
-            print("再见！")
-            return
-        print(f"Cortex: {agent.run(user_input)}")
+    try:
+        print("Cortex 已启动（工具模式），输入 'exit' 退出。")
+        while True:
+            user_input = input("\n你: ")
+            if user_input.strip().lower() in {"exit", "quit", "q"}:
+                print("再见！")
+                return
+            print(f"Cortex: {agent.run(user_input)}")
+    finally:
+        close = getattr(agent, "close", None)
+        if close is not None:
+            close()
