@@ -24,6 +24,7 @@ class Checkpoint:
     important_decisions: list[str]
     artifact_refs: list[str]
     phase: str
+    skill_versions: dict[str, str] = field(default_factory=dict)
     checkpoint_id: str = field(default_factory=lambda: uuid4().hex)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -40,6 +41,7 @@ class Checkpoint:
             important_decisions=list(state.important_decisions),
             artifact_refs=list(state.artifact_references),
             phase=state.phase.value,
+            skill_versions=dict(state.skill_versions),
         )
 
     def restore(self, *, new_run_id: str, max_steps: int) -> AgentState:
@@ -58,6 +60,7 @@ class Checkpoint:
             important_decisions=list(self.important_decisions),
             artifact_references=list(self.artifact_refs),
             step_count=len(completed),
+            skill_versions=dict(self.skill_versions),
         )
 
 

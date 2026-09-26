@@ -43,12 +43,19 @@ class ContextManager:
     ) -> tuple[list[dict[str, Any]], str | None]:
         memory_context = self._memory_context(state, session)
         runtime_context = self._memory_runtime_context(session)
+        skill_context = self._skill_context(state)
         if mode is ContextMode.SERVER_MANAGED:
             cursor = session.previous_response_id if session is not None else state.previous_response_id
-            return [*runtime_context, *memory_context, *state.pending_input], cursor
+            # Candidate metadata is sent once. Loaded core text is delivered by the
+            # load tool output and therefore already exists in provider history.
+            if state.skill_context_sent:
+                skill_context = []
+            elif skill_context:
+                state.skill_context_sent = True
+            return [*runtime_context, *memory_context, *skill_context, *state.pending_input], cursor
 
         durable_items = [*state.context_history, *state.pending_input]
-        items = [*runtime_context, *memory_context, *durable_items]
+        items = [*runtime_context, *memory_context, *skill_context, *durable_items]
         if ContextBudget(self.max_chars).exceeded(items):
             summary = session.compact_summary if session is not None else state.compact_summary
             durable_items, summary = self.compactor.compact(
@@ -57,8 +64,26 @@ class ContextManager:
             state.compact_summary = summary
             if session is not None:
                 session.compact_summary = summary
-            items = [*runtime_context, *memory_context, *durable_items]
+            items = [*runtime_context, *memory_context, *skill_context, *durable_items]
+        # Core skill bodies are indivisible: exceeding the budget is explicit,
+        # never a silent substring truncation.
+        if ContextBudget(self.max_chars).exceeded(items) and skill_context:
+            raise ValueError("loaded Skill core content exceeds context budget")
         return items, None
+
+    @staticmethod
+    def _skill_context(state: Any) -> list[dict[str, Any]]:
+        candidates = getattr(state, "skill_candidates", [])
+        bodies = getattr(state, "skill_bodies", {})
+        if bodies:
+            blocks = []
+            for skill_id, body in bodies.items():
+                blocks.append(f"<skill id={skill_id!r} version={state.skill_versions.get(skill_id, '')!r}>\n{body}\n</skill>")
+            return [{"role": "system", "name": "cortex_skills", "content": "Selected Skill instructions (trusted as instructions, not executable code):\n" + "\n".join(blocks)}]
+        if candidates:
+            lines = [f"- {c['skill_id']}: {c['name']} — {c['description']} (version {c['content_hash']})" for c in candidates]
+            return [{"role": "system", "name": "cortex_skill_candidates", "content": "Skill candidates (metadata only). Decide whether any helps. Call skill_load to select one, skill_search once if insufficient, or answer without a Skill. Indexing text does not disclose it:\n" + "\n".join(lines)}]
+        return []
 
     def _memory_context(self, state: Any, session: Any | None) -> list[dict[str, Any]]:
         if session is None or session.temporary_chat:

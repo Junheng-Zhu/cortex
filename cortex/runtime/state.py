@@ -44,3 +44,11 @@ class AgentState:
     important_decisions: list[str] = field(default_factory=list)
     artifact_references: list[str] = field(default_factory=list)
     compact_summary: str = ""
+    skill_candidates: list[dict[str, Any]] = field(default_factory=list)
+    # File reads and model disclosure are intentionally separate states.
+    skill_versions: dict[str, str] = field(default_factory=dict)
+    skill_bodies: dict[str, str] = field(default_factory=dict, repr=False)
+    skill_disclosed: set[str] = field(default_factory=set)
+    skill_searches: int = 0
+    skill_search_limit: int = 1
+    skill_context_sent: bool = False
