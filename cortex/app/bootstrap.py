@@ -13,6 +13,8 @@ from cortex.memory import MemoryManager, SQLiteMemoryStore
 from cortex.memory.session_store import SessionStore, SQLiteSessionStore
 from cortex.runtime.checkpoint import CheckpointStore, SQLiteCheckpointStore
 from cortex.runtime.session import Session, SessionConfig
+from cortex.skills import BM25SkillIndex, SkillLoadTool, SkillReadResourceTool, SkillRegistry, SkillSearchTool
+from pathlib import Path
 
 
 def build_agent(
@@ -26,6 +28,10 @@ def build_agent(
     session_store: SessionStore | None = None,
     checkpoint_store: CheckpointStore | None = None,
     session_id: str | None = None,
+    skill_roots: list[str | Path] | None = None,
+    skills_enabled: bool = True,
+    explicit_skills: list[str] | None = None,
+    skill_index_body: bool = False,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -36,10 +42,20 @@ def build_agent(
     registry.register(SlowTool())
     registry.register(ShellTool())
     registry.register(ReadArtifactChunkTool(artifact_store))
+    skill_registry = SkillRegistry(
+        [Path(path) for path in (skill_roots if skill_roots is not None else [Path.cwd() / "skills"])],
+        index_body=skill_index_body,
+    )
+    skill_registry.scan()
+    skill_index = BM25SkillIndex(skill_registry)
+    if skills_enabled:
+        registry.register(SkillSearchTool(skill_index))
+        registry.register(SkillLoadTool(skill_registry))
+        registry.register(SkillReadResourceTool(skill_registry))
     executor = ToolExecutor(
         allowed_permissions
         if allowed_permissions is not None
-        else {Permission.READ, Permission.WRITE, Permission.DELETE, Permission.EXECUTE},
+        else set(Permission),
         registry,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore())
@@ -59,6 +75,10 @@ def build_agent(
         memory_manager=durable_memory,
         session_store=episodic_store,
         checkpoint_store=checkpoint_store or SQLiteCheckpointStore(),
+        skill_registry=skill_registry,
+        skill_index=skill_index,
+        skills_enabled=skills_enabled,
+        explicit_skills=explicit_skills,
     )
 
 
