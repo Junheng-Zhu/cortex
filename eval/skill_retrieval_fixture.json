@@ -1,0 +1,17 @@
+{
+  "revision": "cortex-skill-fixture-2026-09-26",
+  "corpus": [
+    {"id": "python-debugging", "name": "Python Debugging", "description": "Diagnose Python tracebacks and exceptions", "body": "Create a minimal reproduction and regression test."},
+    {"id": "release-checklist", "name": "Release Checklist", "description": "Prepare a software release and rollback", "body": "Run tests, review changes, and preserve artifacts."}
+  ],
+  "queries": [
+    {"id": "q1", "query": "help diagnose this Python traceback"},
+    {"id": "q2", "query": "prepare release rollback notes"},
+    {"id": "q3", "query": "debug then prepare a release"}
+  ],
+  "qrels": {
+    "q1": ["python-debugging"],
+    "q2": ["release-checklist"],
+    "q3": ["python-debugging", "release-checklist"]
+  }
+}

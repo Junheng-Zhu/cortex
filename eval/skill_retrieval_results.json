@@ -1,0 +1,48 @@
+{
+  "dataset": "eval/skill_retrieval_fixture.json",
+  "revision": "cortex-skill-fixture-2026-09-26",
+  "query_count": 3,
+  "results": {
+    "bm25_metadata": {
+      "recall@5": 1,
+      "mrr@10": 1.0,
+      "multi_skill_complete@5": 0.6666666666666666,
+      "query_p50_ms": 0.02494999898772221,
+      "query_p95_ms": 0.02494999898772221,
+      "index": {
+        "backend": "bm25",
+        "index_version": "26f81d77066e288ab547427eb7b0c9717316dc667dff07c1e6e30ae9a6bd9d0f",
+        "build_ms": 2.2053339998819865,
+        "cache": "prebuilt",
+        "cold_start_ms": 7.178935000411002,
+        "query_ms": 0.014160999853629619,
+        "degraded": false
+      }
+    },
+    "bm25_body": {
+      "recall@5": 1,
+      "mrr@10": 1.0,
+      "multi_skill_complete@5": 1,
+      "query_p50_ms": 0.017867998394649476,
+      "query_p95_ms": 0.017867998394649476,
+      "index": {
+        "backend": "bm25",
+        "index_version": "0c894bb3e572d3864492da4cbc04a99ed8659eba977d9129e58a7a66aab630f5",
+        "build_ms": 0.04891699973086361,
+        "cache": "prebuilt",
+        "cold_start_ms": 2.5445440005569253,
+        "query_ms": 0.01611700099601876,
+        "degraded": false
+      }
+    },
+    "hybrid": {
+      "available": false,
+      "reason": "embedding backend not configured"
+    },
+    "dense": {
+      "available": false,
+      "reason": "embedding backend not configured"
+    }
+  },
+  "note": "The fixed test set is evaluation-only and must not be used for tuning."
+}

@@ -13,6 +13,8 @@ from cortex.memory import MemoryManager, SQLiteMemoryStore
 from cortex.memory.session_store import SessionStore, SQLiteSessionStore
 from cortex.runtime.checkpoint import CheckpointStore, SQLiteCheckpointStore
 from cortex.runtime.session import Session, SessionConfig
+from cortex.skills import BM25SkillIndex, DenseSkillIndex, EmbeddingCache, HybridSkillIndex, OpenAIEmbeddingBackend, SkillLoadTool, SkillReadResourceTool, SkillRegistry, SkillSearchTool
+from pathlib import Path
 
 
 def build_agent(
@@ -26,6 +28,13 @@ def build_agent(
     session_store: SessionStore | None = None,
     checkpoint_store: CheckpointStore | None = None,
     session_id: str | None = None,
+    skill_roots: list[str | Path] | None = None,
+    skills_enabled: bool = True,
+    explicit_skills: list[str] | None = None,
+    skill_index_body: bool = False,
+    skill_retriever: str = "bm25",
+    skill_embedding_backend=None,
+    skill_snapshot_root: str | Path | None = None,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -36,10 +45,33 @@ def build_agent(
     registry.register(SlowTool())
     registry.register(ShellTool())
     registry.register(ReadArtifactChunkTool(artifact_store))
+    skill_registry = None
+    skill_index = None
+    if skills_enabled:
+        registry_options = {"index_body": skill_index_body}
+        if skill_snapshot_root is not None:
+            registry_options["snapshot_root"] = Path(skill_snapshot_root)
+        skill_registry = SkillRegistry(
+            [Path(path) for path in (skill_roots if skill_roots is not None else [Path.cwd() / "skills"])],
+            **registry_options,
+        )
+        skill_registry.scan()
+        sparse = BM25SkillIndex(skill_registry)
+        if skill_retriever not in {"bm25", "dense", "hybrid"}:
+            raise ValueError(f"unknown Skill retriever: {skill_retriever}")
+        if skill_retriever == "bm25":
+            skill_index = sparse
+        else:
+            backend = skill_embedding_backend or OpenAIEmbeddingBackend()
+            dense = DenseSkillIndex(skill_registry, backend, EmbeddingCache())
+            skill_index = dense if skill_retriever == "dense" else HybridSkillIndex(sparse, dense)
+        registry.register(SkillSearchTool(skill_index))
+        registry.register(SkillLoadTool(skill_registry))
+        registry.register(SkillReadResourceTool(skill_registry))
     executor = ToolExecutor(
         allowed_permissions
         if allowed_permissions is not None
-        else {Permission.READ, Permission.WRITE, Permission.DELETE, Permission.EXECUTE},
+        else set(Permission),
         registry,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore())
@@ -59,6 +91,10 @@ def build_agent(
         memory_manager=durable_memory,
         session_store=episodic_store,
         checkpoint_store=checkpoint_store or SQLiteCheckpointStore(),
+        skill_registry=skill_registry,
+        skill_index=skill_index,
+        skills_enabled=skills_enabled,
+        explicit_skills=explicit_skills,
     )
 
 
