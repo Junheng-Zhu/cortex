@@ -10,6 +10,39 @@ python eval/skill_retrieval.py --dataset eval/skill_retrieval_fixture.json \
   --output eval/skill_retrieval_results.json
 ```
 
+### SkillRet v1.1
+
+下载数据集时保留 Hugging Face 的 test split 目录（也支持去掉最外层
+`data/` 的布局）：
+
+```text
+skillret-v1.1/
+└── data/
+    ├── skills/test.jsonl
+    ├── queries/test.jsonl
+    └── qrels/test.jsonl
+```
+
+评测器只查找 `test` queries 和 qrels；train qrels 不会被自动回退使用。官方
+schema 的 `skills.id`、`queries.id` 和 `qrels.query_id/skill_id/relevance` 会被
+保留并用于打分。PowerShell 中运行仅 BM25 benchmark（Dense 和 Hybrid 会在
+JSON 中明确标记为 unavailable）：
+
+```powershell
+python .\eval\skill_retrieval.py --dataset skillret --adapter skillret --revision a050ad2 --dense-backend none --output .\eval\skillret_bm25_results.json
+```
+
+`--dataset skillret` 使用 `huggingface_hub` 的标准 cache（遵循 `HF_HOME`），且只请求
+三个 test JSONL 文件；已经缓存时直接复用。`--revision` 必须显式提供，以避免 Hub
+head 变化导致结果不可复现。也可以继续把 `--dataset` 指向上述本地目录，此时不会
+访问 Hugging Face。
+
+输出的 `results` 同时包含 `bm25_metadata`、`bm25_body`、`dense` 和 `hybrid`。
+可用 retriever 包含 aggregate 的 Hit、Recall、MRR、Completeness、NDCG、MAP、
+延迟及 index 状态，并在 `queries` 数组中保存逐 query 的 qrels、Top-10 rank、
+score 和 retriever，便于分析 multi-skill 漏召回。test split 只应用于最终评测，
+不得用于调参。
+
 ## 目的
 
 把 Agent 的关键行为变成可自动检查的门禁，而不是只看“最后回答像不像”。
