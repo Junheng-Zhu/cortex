@@ -1,48 +1,241 @@
 {
-  "dataset": "eval/skill_retrieval_fixture.json",
+  "dataset": "eval\\skill_retrieval_fixture.json",
+  "adapter": "generic",
+  "split": null,
   "revision": "cortex-skill-fixture-2026-09-26",
+  "corpus_count": 2,
   "query_count": 3,
   "results": {
     "bm25_metadata": {
-      "recall@5": 1,
+      "hit@1": 1.0,
+      "hit@5": 1.0,
+      "recall@5": 0.8333333333333334,
+      "completeness@5": 0.6666666666666666,
+      "ndcg@5": 0.8710490642551528,
+      "recall@10": 0.8333333333333334,
+      "completeness@10": 0.6666666666666666,
+      "ndcg@10": 0.8710490642551528,
       "mrr@10": 1.0,
-      "multi_skill_complete@5": 0.6666666666666666,
-      "query_p50_ms": 0.02494999898772221,
-      "query_p95_ms": 0.02494999898772221,
+      "map@10": 0.8333333333333334,
+      "query_p50_ms": 0.012199976481497288,
+      "query_p95_ms": 0.012199976481497288,
       "index": {
         "backend": "bm25",
-        "index_version": "26f81d77066e288ab547427eb7b0c9717316dc667dff07c1e6e30ae9a6bd9d0f",
-        "build_ms": 2.2053339998819865,
+        "index_version": "60eb1a959916bcd3d4422aa064f46b4b8b87fac045f13e679ccac38550a766a2",
+        "build_ms": 1.0934999445453286,
         "cache": "prebuilt",
-        "cold_start_ms": 7.178935000411002,
-        "query_ms": 0.014160999853629619,
+        "cold_start_ms": 36.47529997397214,
+        "query_ms": 0.0075999414548277855,
         "degraded": false
-      }
+      },
+      "queries": [
+        {
+          "query_id": "q1",
+          "query": "help diagnose this Python traceback",
+          "relevant_skill_ids": [
+            "python-debugging"
+          ],
+          "retrieved": [
+            {
+              "skill_id": "python-debugging",
+              "rank": 1,
+              "score": 1.7264784164748432,
+              "retriever": "bm25_metadata"
+            }
+          ],
+          "metrics": {
+            "hit@1": 1.0,
+            "hit@5": 1.0,
+            "recall@5": 1.0,
+            "completeness@5": 1.0,
+            "ndcg@5": 1.0,
+            "recall@10": 1.0,
+            "completeness@10": 1.0,
+            "ndcg@10": 1.0,
+            "mrr@10": 1.0,
+            "map@10": 1.0
+          }
+        },
+        {
+          "query_id": "q2",
+          "query": "prepare release rollback notes",
+          "relevant_skill_ids": [
+            "release-checklist"
+          ],
+          "retrieved": [
+            {
+              "skill_id": "release-checklist",
+              "rank": 1,
+              "score": 2.3153534716239603,
+              "retriever": "bm25_metadata"
+            }
+          ],
+          "metrics": {
+            "hit@1": 1.0,
+            "hit@5": 1.0,
+            "recall@5": 1.0,
+            "completeness@5": 1.0,
+            "ndcg@5": 1.0,
+            "recall@10": 1.0,
+            "completeness@10": 1.0,
+            "ndcg@10": 1.0,
+            "mrr@10": 1.0,
+            "map@10": 1.0
+          }
+        },
+        {
+          "query_id": "q3",
+          "query": "debug then prepare a release",
+          "relevant_skill_ids": [
+            "python-debugging",
+            "release-checklist"
+          ],
+          "retrieved": [
+            {
+              "skill_id": "release-checklist",
+              "rank": 1,
+              "score": 2.3153534716239603,
+              "retriever": "bm25_metadata"
+            }
+          ],
+          "metrics": {
+            "hit@1": 1.0,
+            "hit@5": 1.0,
+            "recall@5": 0.5,
+            "completeness@5": 0.0,
+            "ndcg@5": 0.6131471927654584,
+            "recall@10": 0.5,
+            "completeness@10": 0.0,
+            "ndcg@10": 0.6131471927654584,
+            "mrr@10": 1.0,
+            "map@10": 0.5
+          }
+        }
+      ]
     },
     "bm25_body": {
-      "recall@5": 1,
+      "hit@1": 1.0,
+      "hit@5": 1.0,
+      "recall@5": 1.0,
+      "completeness@5": 1.0,
+      "ndcg@5": 1.0,
+      "recall@10": 1.0,
+      "completeness@10": 1.0,
+      "ndcg@10": 1.0,
       "mrr@10": 1.0,
-      "multi_skill_complete@5": 1,
-      "query_p50_ms": 0.017867998394649476,
-      "query_p95_ms": 0.017867998394649476,
+      "map@10": 1.0,
+      "query_p50_ms": 0.009699957445263863,
+      "query_p95_ms": 0.009699957445263863,
       "index": {
         "backend": "bm25",
-        "index_version": "0c894bb3e572d3864492da4cbc04a99ed8659eba977d9129e58a7a66aab630f5",
-        "build_ms": 0.04891699973086361,
+        "index_version": "79118991ca51c9fe173253028d8cde0bd4f73c45d48861b821dcc0f4091202ba",
+        "build_ms": 0.0315000070258975,
         "cache": "prebuilt",
-        "cold_start_ms": 2.5445440005569253,
-        "query_ms": 0.01611700099601876,
+        "cold_start_ms": 6.687899935059249,
+        "query_ms": 0.008600065484642982,
         "degraded": false
-      }
-    },
-    "hybrid": {
-      "available": false,
-      "reason": "embedding backend not configured"
+      },
+      "queries": [
+        {
+          "query_id": "q1",
+          "query": "help diagnose this Python traceback",
+          "relevant_skill_ids": [
+            "python-debugging"
+          ],
+          "retrieved": [
+            {
+              "skill_id": "python-debugging",
+              "rank": 1,
+              "score": 1.7053809475187711,
+              "retriever": "bm25_body"
+            }
+          ],
+          "metrics": {
+            "hit@1": 1.0,
+            "hit@5": 1.0,
+            "recall@5": 1.0,
+            "completeness@5": 1.0,
+            "ndcg@5": 1.0,
+            "recall@10": 1.0,
+            "completeness@10": 1.0,
+            "ndcg@10": 1.0,
+            "mrr@10": 1.0,
+            "map@10": 1.0
+          }
+        },
+        {
+          "query_id": "q2",
+          "query": "prepare release rollback notes",
+          "relevant_skill_ids": [
+            "release-checklist"
+          ],
+          "retrieved": [
+            {
+              "skill_id": "release-checklist",
+              "rank": 1,
+              "score": 2.344466929277614,
+              "retriever": "bm25_body"
+            }
+          ],
+          "metrics": {
+            "hit@1": 1.0,
+            "hit@5": 1.0,
+            "recall@5": 1.0,
+            "completeness@5": 1.0,
+            "ndcg@5": 1.0,
+            "recall@10": 1.0,
+            "completeness@10": 1.0,
+            "ndcg@10": 1.0,
+            "mrr@10": 1.0,
+            "map@10": 1.0
+          }
+        },
+        {
+          "query_id": "q3",
+          "query": "debug then prepare a release",
+          "relevant_skill_ids": [
+            "python-debugging",
+            "release-checklist"
+          ],
+          "retrieved": [
+            {
+              "skill_id": "release-checklist",
+              "rank": 1,
+              "score": 1.8414467904248557,
+              "retriever": "bm25_body"
+            },
+            {
+              "skill_id": "python-debugging",
+              "rank": 2,
+              "score": 0.1851952766033164,
+              "retriever": "bm25_body"
+            }
+          ],
+          "metrics": {
+            "hit@1": 1.0,
+            "hit@5": 1.0,
+            "recall@5": 1.0,
+            "completeness@5": 1.0,
+            "ndcg@5": 1.0,
+            "recall@10": 1.0,
+            "completeness@10": 1.0,
+            "ndcg@10": 1.0,
+            "mrr@10": 1.0,
+            "map@10": 1.0
+          }
+        }
+      ]
     },
     "dense": {
       "available": false,
+      "degraded": false,
+      "reason": "embedding backend not configured"
+    },
+    "hybrid": {
+      "available": false,
+      "degraded": false,
       "reason": "embedding backend not configured"
     }
   },
-  "note": "The fixed test set is evaluation-only and must not be used for tuning."
+  "note": "The fixed test split is evaluation-only and must not be used for tuning."
 }
