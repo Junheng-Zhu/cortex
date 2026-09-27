@@ -29,8 +29,13 @@ schema 的 `skills.id`、`queries.id` 和 `qrels.query_id/skill_id/relevance` �
 JSON 中明确标记为 unavailable）：
 
 ```powershell
-python .\eval\skill_retrieval.py --dataset C:\data\skillret-v1.1 --adapter skillret --dense-backend none --output .\eval\skillret_results.json
+python .\eval\skill_retrieval.py --dataset skillret --adapter skillret --revision a050ad2 --dense-backend none --output .\eval\skillret_bm25_results.json
 ```
+
+`--dataset skillret` 使用 `huggingface_hub` 的标准 cache（遵循 `HF_HOME`），且只请求
+三个 test JSONL 文件；已经缓存时直接复用。`--revision` 必须显式提供，以避免 Hub
+head 变化导致结果不可复现。也可以继续把 `--dataset` 指向上述本地目录，此时不会
+访问 Hugging Face。
 
 输出的 `results` 同时包含 `bm25_metadata`、`bm25_body`、`dense` 和 `hybrid`。
 可用 retriever 包含 aggregate 的 Hit、Recall、MRR、Completeness、NDCG、MAP、

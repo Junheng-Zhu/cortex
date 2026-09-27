@@ -21,6 +21,7 @@ from cortex.skills import BM25SkillIndex, DenseSkillIndex, HybridSkillIndex, Ope
 
 
 Qrels = dict[str, dict[str, float]]
+SKILLRET_DATASET_ID = "ThakiCloud/SKILLRET"
 
 
 def _records(path: Path) -> list[dict]:
@@ -83,7 +84,26 @@ def _load_skillret_qrels(path: Path) -> Qrels:
     return qrels
 
 
-def load_dataset(path: Path, adapter: str = "generic") -> tuple[str, list[dict], list[dict], Qrels]:
+def _resolve_skillret_root(path: Path, revision: str | None) -> tuple[Path, str]:
+    """Resolve the ``skillret`` alias through the standard Hugging Face cache."""
+    if path.as_posix().casefold() not in {"skillret", "thakicloud/skillret"}:
+        return path, revision or "skillret-v1.1"
+    if not revision:
+        raise ValueError("--revision is required when --dataset skillret is used; pin the immutable Hugging Face revision")
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError("--dataset skillret requires huggingface_hub; install the repository requirements") from exc
+    root = snapshot_download(
+        repo_id=SKILLRET_DATASET_ID,
+        repo_type="dataset",
+        revision=revision,
+        allow_patterns=("data/skills/test.jsonl", "data/queries/test.jsonl", "data/qrels/test.jsonl"),
+    )
+    return Path(root), revision
+
+
+def load_dataset(path: Path, adapter: str = "generic", revision: str | None = None) -> tuple[str, list[dict], list[dict], Qrels]:
     """Load normalized corpus, queries and graded qrels.
 
     SkillRet accepts a dataset root and deliberately selects only test queries/qrels.
@@ -96,6 +116,7 @@ def load_dataset(path: Path, adapter: str = "generic") -> tuple[str, list[dict],
         qrels = {str(qid): {str(sid): 1.0 for sid in ids} for qid, ids in data["qrels"].items()}
         return str(data["revision"]), data["corpus"], data["queries"], qrels
 
+    path, resolved_revision = _resolve_skillret_root(path, revision)
     if not path.is_dir():
         raise ValueError("the SkillRet adapter requires the SkillRet v1.1 dataset root directory")
     corpus_path = _find(path, ("data/skills/test.jsonl", "skills/test.jsonl", "test/skills.jsonl", "corpus/test.jsonl", "corpus.jsonl", "skills.jsonl", "corpus.json", "skills.json"), "test corpus")
@@ -120,8 +141,8 @@ def load_dataset(path: Path, adapter: str = "generic") -> tuple[str, list[dict],
     if not skill_ids.intersection({sid for labels in qrels.values() for sid in labels}):
         raise ValueError("SkillRet qrels do not match any corpus skill IDs")
     revision_file = path / "revision.txt"
-    revision = revision_file.read_text(encoding="utf-8").strip() if revision_file.is_file() else "skillret-v1.1"
-    return revision, corpus, queries, qrels
+    dataset_revision = revision_file.read_text(encoding="utf-8").strip() if revision_file.is_file() and revision is None else resolved_revision
+    return dataset_revision, corpus, queries, qrels
 
 
 def materialize(corpus: list[dict], destination: Path) -> dict[str, str]:
@@ -192,8 +213,8 @@ def evaluate(retriever, queries: list[dict], qrels: Qrels, id_map: dict[str, str
     return {**aggregate, "query_p50_ms": percentile(latencies, .5), "query_p95_ms": percentile(latencies, .95), "index": index_status, "queries": per_query}
 
 
-def run(path: Path, adapter: str = "generic", dense_backend=None) -> dict:
-    revision, corpus, queries, qrels = load_dataset(path, adapter)
+def run(path: Path, adapter: str = "generic", dense_backend=None, revision: str | None = None) -> dict:
+    dataset_revision, corpus, queries, qrels = load_dataset(path, adapter, revision)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory) / "skills"
         local_ids = materialize(corpus, root)
@@ -219,19 +240,20 @@ def run(path: Path, adapter: str = "generic", dense_backend=None) -> dict:
         results = {name: evaluate(index, queries, qrels, maps[name], name) for name, index in indexes.items()}
         for missing in ({"dense", "hybrid"} - set(results)):
             results[missing] = {"available": False, "degraded": False, "reason": "embedding backend not configured"}
-        return {"dataset": str(path), "adapter": adapter, "split": "test" if adapter == "skillret" else None, "revision": revision, "corpus_count": len(corpus), "query_count": len(queries), "results": results, "note": "The fixed test split is evaluation-only and must not be used for tuning."}
+        return {"dataset": str(path), "adapter": adapter, "split": "test" if adapter == "skillret" else None, "revision": dataset_revision, "corpus_count": len(corpus), "query_count": len(queries), "results": results, "note": "The fixed test split is evaluation-only and must not be used for tuning."}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--adapter", choices=("generic", "skillret"), default="generic")
+    parser.add_argument("--revision", help="immutable Hugging Face dataset revision (required with --dataset skillret)")
     parser.add_argument("--dense-backend", choices=("none", "openai"), default="none")
     parser.add_argument("--embedding-model", default="text-embedding-3-small")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     backend = OpenAIEmbeddingBackend(model=args.embedding_model) if args.dense_backend == "openai" else None
-    report = run(args.dataset, args.adapter, backend)
+    report = run(args.dataset, args.adapter, backend, args.revision)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))

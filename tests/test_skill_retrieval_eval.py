@@ -1,5 +1,8 @@
 import json
 import math
+from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,9 +54,40 @@ def test_skillret_test_split_schema_and_benchmark(tmp_path):
 
 
 def test_generic_fixture_remains_supported():
-    from pathlib import Path
-
     fixture = Path(__file__).parents[1] / "eval" / "skill_retrieval_fixture.json"
     report = run(fixture)
     assert report["results"]["bm25_metadata"]["hit@5"] == 1
     assert report["results"]["bm25_metadata"]["recall@5"] == pytest.approx(5 / 6)
+
+
+def test_skillret_alias_uses_pinned_hugging_face_cache(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    for subset in ("skills", "queries", "qrels"):
+        (data / subset).mkdir(parents=True)
+    (data / "skills" / "test.jsonl").write_text(
+        json.dumps({"id": "s1", "name": "One", "description": "first", "body": "body"}) + "\n", encoding="utf-8"
+    )
+    (data / "queries" / "test.jsonl").write_text(json.dumps({"id": "q1", "query": "first"}) + "\n", encoding="utf-8")
+    (data / "qrels" / "test.jsonl").write_text(
+        json.dumps({"query_id": "q1", "skill_id": "s1", "relevance": 1}) + "\n", encoding="utf-8"
+    )
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(tmp_path)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=snapshot_download))
+    revision, corpus, queries, qrels = load_dataset(Path("skillret"), "skillret", "a050ad2")
+
+    assert revision == "a050ad2" and corpus[0]["id"] == "s1" and queries[0]["id"] == "q1"
+    assert qrels == {"q1": {"s1": 1.0}}
+    assert calls == [{
+        "repo_id": "ThakiCloud/SKILLRET", "repo_type": "dataset", "revision": "a050ad2",
+        "allow_patterns": ("data/skills/test.jsonl", "data/queries/test.jsonl", "data/qrels/test.jsonl"),
+    }]
+
+
+def test_skillret_alias_requires_revision():
+    with pytest.raises(ValueError, match="--revision is required"):
+        load_dataset(Path("skillret"), "skillret")
