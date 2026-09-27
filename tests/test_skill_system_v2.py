@@ -157,5 +157,5 @@ def test_yaml_multiline_disabled_and_scan_symlink(tmp_path):
 def test_offline_retrieval_evaluation_writes_metrics(tmp_path):
     fixture = Path(__file__).parents[1] / "eval" / "skill_retrieval_fixture.json"
     report = run(fixture)
-    assert report["revision"] and report["results"]["bm25_metadata"]["recall@5"] == 1
+    assert report["revision"] and report["results"]["bm25_metadata"]["hit@5"] == 1
     assert report["results"]["dense"]["available"] is False
