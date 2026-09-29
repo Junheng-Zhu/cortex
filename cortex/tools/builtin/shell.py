@@ -20,7 +20,7 @@ from ..base import (
     Tool,
     ToolSandboxError,
     ToolTimeoutError,
-    ConcurrencyPolicy, ExecutionStrategy,
+    ConcurrencyPolicy, ExecutionStrategy, SideEffectPolicy,
 )
 from ..permission import Permission
 
@@ -114,6 +114,9 @@ class ShellTool(Tool):
     retryable = False
     execution_strategy = ExecutionStrategy.BACKEND_SUPERVISED
     concurrency_policy = ConcurrencyPolicy.SERIAL
+    # Commands are intentionally treated conservatively: determining whether
+    # arbitrary shell is read-only is not reliable.
+    side_effect_policy = SideEffectPolicy.WORKSPACE_REVERSIBLE
 
     def __init__(
         self,
