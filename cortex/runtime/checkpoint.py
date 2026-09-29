@@ -15,7 +15,7 @@ DEFAULT_CHECKPOINT_PATH = Path.cwd() / ".cortex" / "checkpoints.db"
 
 
 @dataclass(frozen=True)
-class Checkpoint:
+class AgentCheckpoint:
     session_id: str
     run_id: str
     goal: str | None
@@ -25,6 +25,7 @@ class Checkpoint:
     important_decisions: list[str]
     artifact_refs: list[str]
     phase: str
+    step_count: int = 0
     skill_versions: dict[str, str] = field(default_factory=dict)
     schema_version: int = 3
     pending_input: list[dict[str, Any]] = field(default_factory=list)
@@ -39,7 +40,7 @@ class Checkpoint:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @classmethod
-    def capture(cls, state: AgentState) -> "Checkpoint":
+    def capture(cls, state: AgentState) -> "AgentCheckpoint":
         completed = [action for action in state.actions if action.status in {"SUCCEEDED", "FAILED"}]
         return cls(
             session_id=state.session_id,
@@ -51,6 +52,7 @@ class Checkpoint:
             important_decisions=list(state.important_decisions),
             artifact_refs=list(state.artifact_references),
             phase=state.phase.value,
+            step_count=state.step_count,
             skill_versions=dict(state.skill_versions),
             pending_input=list(state.pending_input),
             context_history=list(state.context_history),
@@ -69,6 +71,8 @@ class Checkpoint:
         return AgentState(
             run_id=new_run_id,
             session_id=self.session_id,
+            # Resume at an executable boundary rather than replaying OBSERVE or
+            # REFLECT; the captured phase remains available for audit.
             phase=AgentPhase.ACT if pending else AgentPhase.DECIDE,
             actions=[*completed, *pending],
             pending_actions=pending,
@@ -77,7 +81,7 @@ class Checkpoint:
             current_plan=list(self.plan),
             important_decisions=list(self.important_decisions),
             artifact_references=list(self.artifact_refs),
-            step_count=len(completed),
+            step_count=self.step_count,
             skill_versions=dict(self.skill_versions),
             pending_input=list(self.pending_input),
             context_history=list(self.context_history),
@@ -90,23 +94,28 @@ class Checkpoint:
         )
 
 
+# Backwards compatible public name. Existing persisted schema and integrations
+# continue to work while new code can state the logical boundary explicitly.
+Checkpoint = AgentCheckpoint
+
+
 class CheckpointStore(Protocol):
-    def save(self, checkpoint: Checkpoint) -> None: ...
-    def load(self, checkpoint_id: str) -> Checkpoint | None: ...
-    def latest(self, session_id: str) -> Checkpoint | None: ...
+    def save(self, checkpoint: AgentCheckpoint) -> None: ...
+    def load(self, checkpoint_id: str) -> AgentCheckpoint | None: ...
+    def latest(self, session_id: str) -> AgentCheckpoint | None: ...
 
 
 class InMemoryCheckpointStore:
     def __init__(self) -> None:
         self.checkpoints: list[Checkpoint] = []
 
-    def save(self, checkpoint: Checkpoint) -> None:
+    def save(self, checkpoint: AgentCheckpoint) -> None:
         self.checkpoints.append(checkpoint)
 
-    def load(self, checkpoint_id: str) -> Checkpoint | None:
+    def load(self, checkpoint_id: str) -> AgentCheckpoint | None:
         return next((item for item in self.checkpoints if item.checkpoint_id == checkpoint_id), None)
 
-    def latest(self, session_id: str) -> Checkpoint | None:
+    def latest(self, session_id: str) -> AgentCheckpoint | None:
         return next((item for item in reversed(self.checkpoints) if item.session_id == session_id), None)
 
 
@@ -125,7 +134,7 @@ class SQLiteCheckpointStore:
                 "CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id, created_at)"
             )
 
-    def save(self, checkpoint: Checkpoint) -> None:
+    def save(self, checkpoint: AgentCheckpoint) -> None:
         with sqlite3.connect(self.path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO checkpoints VALUES (?, ?, ?, ?, ?)",
@@ -138,14 +147,14 @@ class SQLiteCheckpointStore:
                 ),
             )
 
-    def load(self, checkpoint_id: str) -> Checkpoint | None:
+    def load(self, checkpoint_id: str) -> AgentCheckpoint | None:
         with sqlite3.connect(self.path) as conn:
             row = conn.execute(
                 "SELECT payload FROM checkpoints WHERE checkpoint_id = ?", (checkpoint_id,)
             ).fetchone()
         return self._decode(row[0]) if row else None
 
-    def latest(self, session_id: str) -> Checkpoint | None:
+    def latest(self, session_id: str) -> AgentCheckpoint | None:
         with sqlite3.connect(self.path) as conn:
             row = conn.execute(
                 """SELECT payload FROM checkpoints WHERE session_id = ?
@@ -155,7 +164,7 @@ class SQLiteCheckpointStore:
         return self._decode(row[0]) if row else None
 
     @staticmethod
-    def _decode(payload: str) -> Checkpoint:
+    def _decode(payload: str) -> AgentCheckpoint:
         values = json.loads(payload)
         values["created_at"] = datetime.fromisoformat(values["created_at"])
-        return Checkpoint(**values)
+        return AgentCheckpoint(**values)
