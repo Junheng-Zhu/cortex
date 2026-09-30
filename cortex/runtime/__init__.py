@@ -9,7 +9,7 @@ from .checkpoint import (
 )
 from .execution_checkpoint import (
     ExecutionCheckpoint, InMemoryExecutionCheckpointStore,
-    SQLiteExecutionCheckpointStore, MutationLedger,
+    SQLiteExecutionCheckpointStore, MutationBoundary, MutationLedger,
     MutationRecord, WorkspaceRecoveryRuntime,
 )
 from .workspace import (
@@ -21,7 +21,7 @@ __all__ = [
     "AgentState", "AgentCheckpoint", "Checkpoint", "CheckpointStore", "InMemoryCheckpointStore",
     "Session", "SessionConfig", "SQLiteCheckpointStore",
     "ExecutionCheckpoint", "InMemoryExecutionCheckpointStore", "MutationLedger",
-    "SQLiteExecutionCheckpointStore",
+    "SQLiteExecutionCheckpointStore", "MutationBoundary",
     "MutationRecord", "WorkspaceRecoveryRuntime", "ShadowGitSnapshotStore",
     "WorkspaceChange", "WorkspaceDiff", "WorkspaceOperation", "WorkspaceSnapshot",
 ]

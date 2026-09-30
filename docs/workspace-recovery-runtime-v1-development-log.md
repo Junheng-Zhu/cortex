@@ -122,7 +122,7 @@ pytest -q tests/test_workspace_recovery.py
 
 ## 当前边界与后续工作
 
-本轮交付的是 recovery primitives 和协调器。当前仍需注意：
+V1 首轮交付的是 recovery primitives 和协调器，当时的边界如下（其中 runtime integration 已在下方 V1.1 解决）：
 
 - `WorkspaceRecoveryRuntime` 已提供完整的 checkpoint、mutation 和 rollback API，但尚未自动注入 `AgentLoop` / `ToolExecutor` 的每一次 ShellTool 调用；调用方必须显式通过 recovery runtime 建立 mutation boundary。
 - `MutationLedger` 当前为内存实现；ExecutionCheckpoint 可以使用 SQLite 持久化，workspace 内容由 shadow Git 持久化。
@@ -131,4 +131,18 @@ pytest -q tests/test_workspace_recovery.py
 - pre-rollback checkpoint 会被保存，可用于 rollback-the-rollback，但当前没有更高层的 undo 命令或 checkpoint discovery UI。
 - 本轮未实现 partial rollback、rename detection、手工修改 hash conflict、inverse operation、external compensation、exactly-once external operation、resource-scoped reader/writer scheduler、Git worktree 隔离或分布式 snapshot storage。
 
-后续集成工作的优先级应是：将 recovery coordinator 接入同步与异步 tool wave 的真实执行边界，确保 `WORKSPACE_REVERSIBLE` Tool 的执行无法绕过 snapshot、ledger 和 exclusive write ownership。
+## V1.1 Runtime Integration & Enforcement
+
+V1.1 已完成上述 recovery primitives 与真实执行链路的集成：
+
+- `build_agent()` 默认按 `execution_workspace` 组合 Shadow Git store、Agent/Execution Checkpoint store、MutationLedger 和 WorkspaceRecoveryRuntime，同时允许调用方注入或显式禁用 recovery。
+- `ToolExecutor` 根据 `Tool.side_effect_policy` 决定是否进入 mutation boundary，不包含 `ShellTool` 名称判断；未来的写文件工具只需声明 `WORKSPACE_REVERSIBLE` 即可复用。
+- permission 和 validation 在 mutation boundary 之前完成，不执行 Tool 时不会创建 workspace snapshot。
+- 同步 `AgentLoop` 在 Observe/Reflect 完成后提交 logical state；异步 ordered wave 在整轮 Observe/Reflect 后提交 `committed_wave` ExecutionCheckpoint。
+- read-only parallel wave 保持并发且不创建 workspace snapshot；reversible tool 会形成 serial barrier。
+- sync 与 async mutation 共用按 workspace identity 建立的 exclusive ownership。异步获取采用可取消的 non-blocking polling，不在持有 blocking wait 时阻塞 event loop，也不会留下后台 orphan waiter。
+- reversible tool 禁止自动 retry，避免在前一次 attempt 可能已经修改 workspace 的未知状态上重复执行。
+- failure、timeout 和 cancellation 均会保存执行后的 physical snapshot；cancellation 创建 `cancelled_mutation` checkpoint 后继续传播 `CancelledError`。
+- mutation observability event 包含 action、wave、tool、policy、前后 checkpoint、snapshot、diff operation counts、duration 和 recovery outcome。
+
+V1.1 的集成测试进一步覆盖同步 Shell create/modify/delete、真实 async AgentLoop、metadata-driven fake Tool、read-only 并发、同 workspace 串行化、不同 workspace 并发、失败、取消、permission/validation short-circuit，以及 logical/physical rollback 一致性。

@@ -1,6 +1,11 @@
 from .registry import ToolRegistry
 from typing import Any
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cortex.runtime.execution_checkpoint import MutationBoundary, WorkspaceRecoveryRuntime
+    from cortex.runtime.state import AgentState
 
 
 @dataclass
@@ -13,6 +18,14 @@ class ToolResult:
     error_message: str | None
     data: Any
     validation_passed: bool | None = None
+    mutation_boundary: "MutationBoundary | None" = None
+
+
+@dataclass
+class ToolExecutionContext:
+    state: "AgentState"
+    action_id: str
+    wave_id: str | None = None
 
 
 @dataclass
@@ -31,7 +44,9 @@ class ExecutionOutcome:
         return type(self.error).__name__ if self.error else None
 
 
-from .base import ConcurrencyPolicy, ExecutionStrategy, Tool, ToolTimeoutError
+from .base import (
+    ConcurrencyPolicy, ExecutionStrategy, SideEffectPolicy, Tool, ToolTimeoutError,
+)
 from copy import deepcopy
 import time
 from pydantic import ValidationError
@@ -46,6 +61,7 @@ class ToolExecutor:
     def __init__(
         self, allowed_permissions: set, registry: ToolRegistry,
         max_tool_concurrency: int = 4,
+        recovery_runtime: "WorkspaceRecoveryRuntime | None" = None,
     ):
         if max_tool_concurrency < 1:
             raise ValueError("max_tool_concurrency must be at least 1")
@@ -54,6 +70,7 @@ class ToolExecutor:
         self.timeout = 10
         self.max_retries = 5
         self.max_tool_concurrency = max_tool_concurrency
+        self.recovery_runtime = recovery_runtime
         self.last_batch_metrics: dict[str, Any] = {}
         # These are executor-owned, so concurrent batches/runs share limits.
         self._concurrency_semaphore = asyncio.Semaphore(max_tool_concurrency)
@@ -184,9 +201,11 @@ class ToolExecutor:
             )
             queue.put(outcome)
 
-    def _execute_with_retry(self, tool: Tool, validated_input) -> ToolResult:
+    def _execute_with_retry(
+        self, tool: Tool, validated_input, *, allow_retry: bool = True,
+    ) -> ToolResult:
         attempts = 0
-        tool_retries = min(tool.max_retries, self.max_retries)
+        tool_retries = min(tool.max_retries, self.max_retries) if allow_retry else 0
         tool_timeout = self._runtime_timeout(tool)
 
         for i in range(tool_retries + 1):
@@ -223,7 +242,7 @@ class ToolExecutor:
             if outcome.success:
                 return self._result(tool, outcome)
             else:
-                if self._should_retry(outcome, tool, attempts):
+                if allow_retry and self._should_retry(outcome, tool, attempts):
                     continue
                 else:
                     return self._result(tool, outcome)
@@ -267,7 +286,10 @@ class ToolExecutor:
     def __exit__(self, *_args) -> None:
         self.close()
 
-    def execute(self, tool_name: str, arguments) -> ToolResult:
+    def execute(
+        self, tool_name: str, arguments,
+        context: ToolExecutionContext | None = None,
+    ) -> ToolResult:
         start = time.perf_counter()
         tool = self._get_tool(tool_name)
         if not self._check_permission(tool):
@@ -296,13 +318,47 @@ class ToolExecutor:
                 validation_passed=False,
             )
 
-        tool_result = self._execute_with_retry(tool, validated_input)
+        boundary = None
+        direct_boundary = False
+        if (tool.side_effect_policy is SideEffectPolicy.WORKSPACE_REVERSIBLE and
+                self.recovery_runtime is not None):
+            if context is None:
+                from cortex.runtime.state import AgentState
+                context = ToolExecutionContext(
+                    AgentState(run_id=f"direct-{uuid4()}",
+                               session_id="tool-executor-direct"),
+                    str(uuid4()),
+                )
+                direct_boundary = True
+            boundary = self.recovery_runtime.begin_mutation(
+                context.state, action_id=context.action_id, tool_name=tool.name,
+                wave_id=context.wave_id,
+                side_effect_policy=tool.side_effect_policy.value,
+            )
+        try:
+            tool_result = self._execute_with_retry(
+                tool, validated_input,
+                allow_retry=tool.side_effect_policy is not SideEffectPolicy.WORKSPACE_REVERSIBLE,
+            )
+            if boundary is not None:
+                boundary.capture_after_execution()
+                tool_result.mutation_boundary = boundary
+                if direct_boundary:
+                    boundary.commit(context.state, reason="direct_execution")
+                    tool_result.mutation_boundary = None
+        except BaseException:
+            if boundary is not None:
+                boundary.cancel(context.state)
+            raise
         tool_result.validation_passed = True
         end = time.perf_counter()
         tool_result.duration_ms = int((end - start) * 1000)
         return tool_result
 
-    async def aexecute(self, tool_name: str, arguments) -> ToolResult:
+    async def aexecute(
+        self, tool_name: str, arguments,
+        context: ToolExecutionContext | None = None,
+    ) -> ToolResult:
         """Execute one tool without blocking the event loop."""
         start = time.perf_counter()
         try:
@@ -320,14 +376,51 @@ class ToolExecutor:
         except ValidationError as exc:
             return ToolResult(tool.name, 0, 0, False, "ToolValidationError",
                               str(exc), None, False)
-        result = await self._aexecute_with_retry(tool, validated)
+        boundary = None
+        direct_boundary = False
+        if (tool.side_effect_policy is SideEffectPolicy.WORKSPACE_REVERSIBLE and
+                self.recovery_runtime is not None):
+            if context is None:
+                from cortex.runtime.state import AgentState
+                context = ToolExecutionContext(
+                    AgentState(run_id=f"direct-{uuid4()}",
+                               session_id="tool-executor-direct"),
+                    str(uuid4()),
+                )
+                direct_boundary = True
+            boundary = await self.recovery_runtime.abegin_mutation(
+                context.state, action_id=context.action_id, tool_name=tool.name,
+                wave_id=context.wave_id,
+                side_effect_policy=tool.side_effect_policy.value,
+            )
+        try:
+            result = await self._aexecute_with_retry(
+                tool, validated,
+                allow_retry=tool.side_effect_policy is not SideEffectPolicy.WORKSPACE_REVERSIBLE,
+            )
+            if boundary is not None:
+                boundary.capture_after_execution()
+                result.mutation_boundary = boundary
+                if direct_boundary:
+                    boundary.commit(context.state, reason="direct_execution")
+                    result.mutation_boundary = None
+        except asyncio.CancelledError:
+            if boundary is not None:
+                boundary.cancel(context.state)
+            raise
+        except BaseException:
+            if boundary is not None:
+                boundary.cancel(context.state)
+            raise
         result.validation_passed = True
         result.duration_ms = int((time.perf_counter() - start) * 1000)
         return result
 
-    async def _aexecute_with_retry(self, tool: Tool, validated: Any) -> ToolResult:
+    async def _aexecute_with_retry(
+        self, tool: Tool, validated: Any, *, allow_retry: bool = True,
+    ) -> ToolResult:
         attempts = 0
-        retries = min(tool.max_retries, self.max_retries)
+        retries = min(tool.max_retries, self.max_retries) if allow_retry else 0
         while attempts <= retries:
             attempts += 1
             if tool.execution_strategy is ExecutionStrategy.BACKEND_SUPERVISED:
@@ -340,7 +433,8 @@ class ToolExecutor:
                     outcome = ExecutionOutcome(False, exc, attempts, None)
             else:
                 outcome = await self._aexecute_process(tool, validated, attempts)
-            if outcome.success or not self._should_retry(outcome, tool, attempts):
+            if (outcome.success or not allow_retry or
+                    not self._should_retry(outcome, tool, attempts)):
                 return self._result(tool, outcome)
         raise AssertionError("unreachable")
 
@@ -387,7 +481,10 @@ class ToolExecutor:
 
     def _concurrency_policy(self, tool_name: str) -> ConcurrencyPolicy:
         try:
-            return self._get_tool(tool_name).concurrency_policy
+            tool = self._get_tool(tool_name)
+            if tool.side_effect_policy is SideEffectPolicy.WORKSPACE_REVERSIBLE:
+                return ConcurrencyPolicy.SERIAL
+            return tool.concurrency_policy
         except Exception:
             # Unknown calls are normalized by aexecute and act as a barrier.
             return ConcurrencyPolicy.SERIAL
@@ -397,6 +494,7 @@ class ToolExecutor:
         calls: list[tuple[str, dict[str, Any]]],
         on_wave: Callable[[list[tuple[int, ToolResult]], dict[str, Any]],
                           Awaitable[bool]] | None = None,
+        contexts: list[ToolExecutionContext] | None = None,
     ) -> list[ToolResult]:
         """Execute waves, optionally committing each before scheduling the next.
 
@@ -418,9 +516,15 @@ class ToolExecutor:
                     name, arguments = calls[index]
                     if policy is ConcurrencyPolicy.SERIAL:
                         async with self._serial_lock:
-                            results[index] = await self.aexecute(name, arguments)
+                            results[index] = await self.aexecute(
+                                name, arguments,
+                                contexts[index] if contexts is not None else None,
+                            )
                     else:
-                        results[index] = await self.aexecute(name, arguments)
+                        results[index] = await self.aexecute(
+                            name, arguments,
+                            contexts[index] if contexts is not None else None,
+                        )
                 finally:
                     active -= 1
 
@@ -434,11 +538,15 @@ class ToolExecutor:
                 ) is ConcurrencyPolicy.PARALLEL_SAFE:
                     end += 1
             wave_started = time.perf_counter()
+            wave_id = f"{batch_id}:{len(waves)}"
+            if contexts is not None:
+                for item_index in range(index, end):
+                    contexts[item_index].wave_id = wave_id
             async with asyncio.TaskGroup() as group:
                 for item_index in range(index, end):
                     group.create_task(run(item_index, policy))
             wave = {
-                "wave_id": f"{batch_id}:{len(waves)}",
+                "wave_id": wave_id,
                 "policy": policy.value,
                 "size": end - index,
                 "duration_ms": int((time.perf_counter() - wave_started) * 1000),

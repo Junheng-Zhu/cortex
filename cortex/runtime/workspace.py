@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import threading
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -61,16 +62,42 @@ class WorkspaceDiff:
 
 
 class WorkspaceWriteLock:
-    """Process-wide exclusive ownership for mutation, snapshot and restore."""
+    """Cross-mode, process-wide exclusive ownership for one workspace.
+
+    ``threading.Lock`` is intentionally used rather than ``RLock``: async
+    contenders poll its non-blocking acquire operation, so cancellation cannot
+    strand a background waiter. Recovery internals use the store's unlocked
+    primitives after taking ownership once, avoiding re-entrant acquisition.
+    """
 
     _guard = threading.Lock()
-    _locks: dict[str, threading.RLock] = {}
+    _locks: dict[str, "WorkspaceWriteLock"] = {}
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self._lock.release()
+
+    async def acquire_async(self) -> None:
+        # Polling a non-blocking process-local lock keeps the event loop safe
+        # and, unlike cancelling ``to_thread(lock.acquire)``, cannot leave a
+        # background waiter that later acquires an orphaned lock.
+        while not self._lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+
+    def release(self) -> None:
+        self._lock.release()
 
     @classmethod
-    def for_workspace(cls, workspace: str | Path) -> threading.RLock:
+    def for_workspace(cls, workspace: str | Path) -> "WorkspaceWriteLock":
         key = str(Path(workspace).resolve())
         with cls._guard:
-            return cls._locks.setdefault(key, threading.RLock())
+            return cls._locks.setdefault(key, cls())
 
 
 class ShadowGitSnapshotStore:
@@ -154,23 +181,27 @@ class ShadowGitSnapshotStore:
 
     def snapshot(self) -> WorkspaceSnapshot:
         with self.lock:
-            files = self._capture_files()
-            tree = self._tree(files)
-            parent = self._git("rev-parse", "--verify", "refs/heads/snapshots") if self._has_head() else None
-            args = ["commit-tree", tree, "-m", "Cortex workspace snapshot"]
-            if parent:
-                args[2:2] = ["-p", parent]
-            env = os.environ.copy()
-            env.update({"GIT_AUTHOR_NAME": "Cortex", "GIT_AUTHOR_EMAIL": "cortex@localhost",
-                        "GIT_COMMITTER_NAME": "Cortex", "GIT_COMMITTER_EMAIL": "cortex@localhost"})
-            proc = subprocess.run(["git", f"--git-dir={self.git_dir}", *args], env=env,
-                                  check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            commit = proc.stdout.decode().strip()
-            self._git("update-ref", "refs/heads/snapshots", commit)
-            snap = WorkspaceSnapshot(commit, self.workspace_id, commit, tree,
-                                     self._manifest_hash(files), files)
-            self._snapshots[snap.workspace_snapshot_id] = snap
-            return snap
+            return self.snapshot_unlocked()
+
+    def snapshot_unlocked(self) -> WorkspaceSnapshot:
+        """Capture while the caller already owns ``lock``."""
+        files = self._capture_files()
+        tree = self._tree(files)
+        parent = self._git("rev-parse", "--verify", "refs/heads/snapshots") if self._has_head() else None
+        args = ["commit-tree", tree, "-m", "Cortex workspace snapshot"]
+        if parent:
+            args[2:2] = ["-p", parent]
+        env = os.environ.copy()
+        env.update({"GIT_AUTHOR_NAME": "Cortex", "GIT_AUTHOR_EMAIL": "cortex@localhost",
+                    "GIT_COMMITTER_NAME": "Cortex", "GIT_COMMITTER_EMAIL": "cortex@localhost"})
+        proc = subprocess.run(["git", f"--git-dir={self.git_dir}", *args], env=env,
+                              check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        commit = proc.stdout.decode().strip()
+        self._git("update-ref", "refs/heads/snapshots", commit)
+        snap = WorkspaceSnapshot(commit, self.workspace_id, commit, tree,
+                                 self._manifest_hash(files), files)
+        self._snapshots[snap.workspace_snapshot_id] = snap
+        return snap
 
     def load(self, snapshot_id: str) -> WorkspaceSnapshot | None:
         """Rehydrate a snapshot from the durable shadow object database."""
@@ -230,29 +261,35 @@ class ShadowGitSnapshotStore:
         if snapshot.workspace_id != self.workspace_id:
             raise ValueError("snapshot belongs to a different workspace")
         with self.lock:
-            wanted = {item.path: item for item in snapshot.files}
-            for path in sorted(self._paths(), key=lambda p: len(p.parts), reverse=True):
-                relative = path.relative_to(self.workspace).as_posix()
-                if relative not in wanted:
-                    if path.is_dir() and not path.is_symlink():
-                        shutil.rmtree(path)
-                    else:
-                        path.unlink(missing_ok=True)
-            for relative, item in wanted.items():
-                path = self.workspace / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if path.exists() or path.is_symlink():
-                    if path.is_dir() and not path.is_symlink():
-                        shutil.rmtree(path)
-                    else:
-                        path.unlink()
-                data = subprocess.run(["git", f"--git-dir={self.git_dir}", "cat-file", "blob",
-                                       item.content_hash], check=True, stdout=subprocess.PIPE).stdout
-                if item.mode == "120000":
-                    os.symlink(data.decode(), path)
+            self.restore_unlocked(snapshot)
+
+    def restore_unlocked(self, snapshot: WorkspaceSnapshot) -> None:
+        """Restore while the caller already owns ``lock``."""
+        if snapshot.workspace_id != self.workspace_id:
+            raise ValueError("snapshot belongs to a different workspace")
+        wanted = {item.path: item for item in snapshot.files}
+        for path in sorted(self._paths(), key=lambda p: len(p.parts), reverse=True):
+            relative = path.relative_to(self.workspace).as_posix()
+            if relative not in wanted:
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
                 else:
-                    path.write_bytes(data)
-                    path.chmod(0o755 if item.mode == "100755" else 0o644)
-            actual = self._manifest_hash(self._capture_files())
-            if actual != snapshot.manifest_hash:
-                raise RuntimeError("restored workspace failed manifest verification")
+                    path.unlink(missing_ok=True)
+        for relative, item in wanted.items():
+            path = self.workspace / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists() or path.is_symlink():
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            data = subprocess.run(["git", f"--git-dir={self.git_dir}", "cat-file", "blob",
+                                   item.content_hash], check=True, stdout=subprocess.PIPE).stdout
+            if item.mode == "120000":
+                os.symlink(data.decode(), path)
+            else:
+                path.write_bytes(data)
+                path.chmod(0o755 if item.mode == "100755" else 0o644)
+        actual = self._manifest_hash(self._capture_files())
+        if actual != snapshot.manifest_hash:
+            raise RuntimeError("restored workspace failed manifest verification")

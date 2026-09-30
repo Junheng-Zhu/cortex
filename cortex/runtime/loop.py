@@ -19,6 +19,7 @@ from cortex.memory.consolidation import MemoryConsolidator, ScopedMemoryCandidat
 from cortex.memory.session_store import SessionEvent, SessionStore
 from cortex.tools.permission import Permission
 from .checkpoint import Checkpoint, CheckpointStore
+from cortex.tools.executor import ToolExecutionContext
 
 
 class AgentLoop:
@@ -45,11 +46,16 @@ class AgentLoop:
         skills_enabled: bool = True,
         explicit_skills: list[str] | None = None,
         skill_candidate_limit: int = 5,
+        workspace_recovery_runtime=None,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         self.llm = llm
         self.executor = executor
+        self.workspace_recovery_runtime = (
+            workspace_recovery_runtime or
+            getattr(executor, "recovery_runtime", None)
+        )
         self.max_steps = max_steps
         configured_context_mode = context_mode or getattr(
             getattr(llm, "capabilities", None),
@@ -69,6 +75,9 @@ class AgentLoop:
         self.explicit_skills = list(explicit_skills or [])
         self.skill_candidate_limit = skill_candidate_limit
         self.recorder = recorder or RunRecorder(persist=self.session_config.persist_trace)
+        if (self.workspace_recovery_runtime is not None and
+                self.workspace_recovery_runtime.recorder is None):
+            self.workspace_recovery_runtime.recorder = self.recorder
         self.reflector = Reflector()
         self.artifact_store = artifact_store or ArtifactStore()
         self.observation_policy = observation_policy or ObservationPolicy(
@@ -485,7 +494,6 @@ class AgentLoop:
             return
 
         action = state.pending_actions[0]
-        action.status = "RUNNING"
         started = time.perf_counter()
         try:
             if action.tool_name == "skill_search" and state.skill_searches >= state.skill_search_limit:
@@ -501,9 +509,15 @@ class AgentLoop:
                 arguments["content_hash"] = selected_version
             else:
                 arguments = action.arguments
-            state.last_tool_result = self.executor.execute(
-                action.tool_name, arguments
-            )
+            if getattr(self.executor, "recovery_runtime", None) is not None:
+                state.last_tool_result = self.executor.execute(
+                    action.tool_name, arguments,
+                    ToolExecutionContext(state, action.action_id),
+                )
+            else:
+                state.last_tool_result = self.executor.execute(
+                    action.tool_name, arguments
+                )
             action.status = "SUCCEEDED" if state.last_tool_result.success else "FAILED"
         except Exception as exc:
             action.status = "FAILED"
@@ -550,6 +564,9 @@ class AgentLoop:
         all_actions = list(state.pending_actions)
         actions = all_actions[:remaining_steps]
         calls = [(action.tool_name, action.arguments) for action in actions]
+        execution_contexts = [
+            ToolExecutionContext(state, action.action_id) for action in actions
+        ]
         stopped = False
         batch_started = time.perf_counter()
         committed_waves = []
@@ -599,10 +616,18 @@ class AgentLoop:
                 stopped = True
             else:
                 state.phase = AgentPhase.ACT
+            for _index, result in indexed_results:
+                if result.mutation_boundary is not None:
+                    result.mutation_boundary.commit(state, reason="committed_wave")
             self._save_checkpoint(state)
             return not stopped
 
-        await self.executor.aexecute_waves(calls, commit_wave)
+        if getattr(self.executor, "recovery_runtime", None) is not None:
+            await self.executor.aexecute_waves(
+                calls, commit_wave, contexts=execution_contexts
+            )
+        else:
+            await self.executor.aexecute_waves(calls, commit_wave)
         batch_id = (committed_waves[0]["wave_id"].split(":", 1)[0]
                     if committed_waves else None)
         self.recorder.record(
@@ -756,6 +781,10 @@ class AgentLoop:
             )
         else:
             state.phase = AgentPhase.DECIDE
+        result = state.last_tool_result
+        boundary = getattr(result, "mutation_boundary", None)
+        if boundary is not None:
+            boundary.commit(state, reason="committed_action")
 
 
 Agent = AgentLoop
