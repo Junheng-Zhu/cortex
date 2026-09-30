@@ -1,13 +1,27 @@
 from .session import Session, SessionConfig
 from .state import AgentState
 from .checkpoint import (
+    AgentCheckpoint,
     Checkpoint,
     CheckpointStore,
     InMemoryCheckpointStore,
     SQLiteCheckpointStore,
 )
+from .execution_checkpoint import (
+    ExecutionCheckpoint, InMemoryExecutionCheckpointStore,
+    SQLiteExecutionCheckpointStore, MutationBoundary, MutationLedger,
+    MutationRecord, WorkspaceRecoveryRuntime,
+)
+from .workspace import (
+    ShadowGitSnapshotStore, WorkspaceChange, WorkspaceDiff, WorkspaceOperation,
+    WorkspaceSnapshot,
+)
 
 __all__ = [
-    "AgentState", "Checkpoint", "CheckpointStore", "InMemoryCheckpointStore",
+    "AgentState", "AgentCheckpoint", "Checkpoint", "CheckpointStore", "InMemoryCheckpointStore",
     "Session", "SessionConfig", "SQLiteCheckpointStore",
+    "ExecutionCheckpoint", "InMemoryExecutionCheckpointStore", "MutationLedger",
+    "SQLiteExecutionCheckpointStore", "MutationBoundary",
+    "MutationRecord", "WorkspaceRecoveryRuntime", "ShadowGitSnapshotStore",
+    "WorkspaceChange", "WorkspaceDiff", "WorkspaceOperation", "WorkspaceSnapshot",
 ]

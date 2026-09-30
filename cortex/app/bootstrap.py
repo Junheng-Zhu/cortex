@@ -14,6 +14,11 @@ from cortex.llm.client import LLMClient
 from cortex.memory import MemoryManager, SQLiteMemoryStore
 from cortex.memory.session_store import SessionStore, SQLiteSessionStore
 from cortex.runtime.checkpoint import CheckpointStore, SQLiteCheckpointStore
+from cortex.runtime.execution_checkpoint import (
+    ExecutionCheckpointStore, MutationLedger, SQLiteExecutionCheckpointStore,
+    WorkspaceRecoveryRuntime,
+)
+from cortex.runtime.workspace import ShadowGitSnapshotStore
 from cortex.runtime.session import Session, SessionConfig
 from cortex.skills import BM25SkillIndex, DenseSkillIndex, EmbeddingCache, HybridSkillIndex, OpenAIEmbeddingBackend, SkillLoadTool, SkillReadResourceTool, SkillRegistry, SkillSearchTool
 from pathlib import Path
@@ -40,6 +45,12 @@ def build_agent(
     execution_backend: ExecutionBackend | str | None = None,
     execution_workspace: str | Path | None = None,
     max_tool_concurrency: int = 4,
+    workspace_recovery_enabled: bool = True,
+    workspace_recovery_runtime: WorkspaceRecoveryRuntime | None = None,
+    workspace_snapshot_store: ShadowGitSnapshotStore | None = None,
+    execution_checkpoint_store: ExecutionCheckpointStore | None = None,
+    mutation_ledger: MutationLedger | None = None,
+    workspace_snapshot_root: str | Path | None = None,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = ToolRegistry()
@@ -82,12 +93,35 @@ def build_agent(
         registry.register(SkillSearchTool(skill_index))
         registry.register(SkillLoadTool(skill_registry))
         registry.register(SkillReadResourceTool(skill_registry))
+    agent_checkpoint_store = checkpoint_store or SQLiteCheckpointStore()
+    runtime_recorder = recorder or RunRecorder(
+        persist=(session_config or SessionConfig()).persist_trace
+    )
+    recovery = workspace_recovery_runtime
+    if recovery is not None and recovery.snapshots.workspace != workspace:
+        raise ValueError("workspace recovery runtime does not match execution_workspace")
+    if recovery is None and workspace_recovery_enabled:
+        snapshots = workspace_snapshot_store or ShadowGitSnapshotStore(
+            workspace, workspace_snapshot_root
+        )
+        if snapshots.workspace != workspace:
+            raise ValueError("workspace snapshot store does not match execution_workspace")
+        recovery = WorkspaceRecoveryRuntime(
+            snapshots,
+            agent_checkpoint_store,
+            execution_checkpoint_store or SQLiteExecutionCheckpointStore(
+                Path.cwd() / ".cortex" / "execution_checkpoints.db"
+            ),
+            mutation_ledger,
+            runtime_recorder,
+        )
     executor = ToolExecutor(
         allowed_permissions
         if allowed_permissions is not None
         else set(Permission),
         registry,
         max_tool_concurrency=max_tool_concurrency,
+        recovery_runtime=recovery,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore())
     episodic_store = session_store or SQLiteSessionStore()
@@ -99,17 +133,18 @@ def build_agent(
         llm=client,
         executor=executor,
         max_steps=max_steps,
-        recorder=recorder,
+        recorder=runtime_recorder,
         artifact_store=artifact_store,
         session=session,
         session_config=session_config,
         memory_manager=durable_memory,
         session_store=episodic_store,
-        checkpoint_store=checkpoint_store or SQLiteCheckpointStore(),
+        checkpoint_store=agent_checkpoint_store,
         skill_registry=skill_registry,
         skill_index=skill_index,
         skills_enabled=skills_enabled,
         explicit_skills=explicit_skills,
+        workspace_recovery_runtime=recovery,
     )
 
 

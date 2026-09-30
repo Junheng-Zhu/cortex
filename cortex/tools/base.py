@@ -19,6 +19,20 @@ class ConcurrencyPolicy(str, Enum):
     PARALLEL_SAFE = "parallel_safe"
 
 
+class SideEffectPolicy(str, Enum):
+    """The kind of durable side effect produced by a tool.
+
+    Workspace writes can be snapshotted and restored by the recovery runtime;
+    compensatable and irreversible effects are deliberately only classified in
+    V1 (they are not automatically undone).
+    """
+
+    NONE = "none"
+    WORKSPACE_REVERSIBLE = "workspace_reversible"
+    COMPENSATABLE = "compensatable"
+    IRREVERSIBLE = "irreversible"
+
+
 class Tool(ABC):
     name: str
     description: str
@@ -29,6 +43,7 @@ class Tool(ABC):
     timeout:int
     execution_strategy = ExecutionStrategy.PROCESS_SUPERVISED
     concurrency_policy = ConcurrencyPolicy.SERIAL
+    side_effect_policy = SideEffectPolicy.NONE
 
     def close(self) -> None:
         """Release runtime-owned resources held by this tool."""
