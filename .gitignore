@@ -10,3 +10,4 @@ eval/online_baseline.json
 eval/raw/
 .cortex/*.db
 .venv/
+.playground/
