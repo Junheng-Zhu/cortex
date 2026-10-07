@@ -317,7 +317,7 @@ class WorkspaceManager:
                         if runtime.execution_checkpoints.path.resolve() != self.database.resolve():
                             db.execute('ATTACH DATABASE ? AS history', (str(runtime.execution_checkpoints.path),))
                             db.execute('PRAGMA history.synchronous=FULL')
-                            history = 'history' 
+                            history = 'history'
                         db.execute(f'INSERT INTO {history}.execution_checkpoints VALUES (?,?,?,?)',
                             (post.execution_checkpoint_id, post.session_id, post.created_at.isoformat(), json.dumps(asdict(post), default=str)))
                         db.execute(f'INSERT INTO {history}.execution_heads VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET checkpoint_id=excluded.checkpoint_id',
