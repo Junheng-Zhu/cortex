@@ -609,3 +609,61 @@ def test_direct_session_is_lazy_and_recovery_disabled_still_has_ownership(tmp_pa
         assert result.success and (root / 'file').read_text() == 'direct'
     finally:
         agent.close()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX directory handle generation check')
+def test_generation_rejects_replacement_even_if_path_identity_matches(tmp_path):
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    store = ShadowGitSnapshotStore(root, tmp_path / 'shadow')
+    try:
+        root.rmdir()
+        root.mkdir()
+        # Simulate an inode-only detector accepting the replacement. The pinned
+        # original directory must still reject it, independent of allocation order.
+        current = root.stat()
+        store.generation = current.st_dev, current.st_ino
+        with pytest.raises(RuntimeError, match='stale'):
+            store.snapshot()
+        with pytest.raises(RuntimeError, match='stale'):
+            store.excluded_state()
+    finally:
+        store.close()
+
+
+def test_directory_writes_preserve_snapshot_store_generation(tmp_path):
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    store = ShadowGitSnapshotStore(root, tmp_path / 'shadow')
+    try:
+        (root / 'created').write_text('new')
+        first = store.snapshot()
+        (root / 'created').unlink()
+        assert store.snapshot().files == ()
+        store.restore(first)
+        assert (root / 'created').read_text() == 'new'
+    finally:
+        store.close()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX directory handle lifecycle')
+def test_snapshot_store_releases_generation_handle(tmp_path):
+    import gc
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    store = ShadowGitSnapshotStore(root, tmp_path / 'shadow')
+    descriptor = store._directory_fd
+    store.close()
+    store.close()
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+    with pytest.raises(RuntimeError, match='closed'):
+        store.snapshot()
+    del store
+    gc.collect()
+    store = ShadowGitSnapshotStore(root, tmp_path / 'shadow')
+    descriptor = store._directory_fd
+    del store
+    gc.collect()
+    with pytest.raises(OSError):
+        os.fstat(descriptor)

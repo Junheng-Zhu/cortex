@@ -101,7 +101,10 @@ Git/runtime metadata 在隔离后端中只读，支持 `git status/diff/log` 等
 路径校验拒绝 traversal、绝对路径、Windows drive/UNC/backslash/ADS、保留设备名、
 尾随点/空格、protected components、文件和目录的大小写别名、symlink parent、
 逃逸或指向 protected metadata 的 symlink。FIFO/socket/device 等特殊文件 fail closed。
-Session 除 dev/inode 外还检查隔离目录中的 session marker，阻止 stale generation。
+Snapshot store 在 POSIX 上持有原目录的文件描述符，校验原目录仍有链接且路径仍指向
+该目录，避免删除重建时 inode 复用造成 stale generation 漏检；显式 close 或对象回收
+会释放句柄。Windows 使用目录 creation time 作为额外校验，不把正常目录写入当作
+generation 变化。Session 除 dev/inode 外还检查隔离目录中的 session marker。
 所有目标在写入前先校验，不把不能恢复的路径隐式当成可逆路径。
 
 ## Durable Ledger 与 Selective Recovery
@@ -219,7 +222,7 @@ CORTEX_RUN_DOCKER_TESTS=1 .venv/bin/python -m pytest -q -ra
 .venv/bin/python eval/smoke_eval.py
 ```
 
-结果：174 passed，1 skipped；Eval Gate PASSED。真实 Docker daemon 和 runtime image
+结果：177 passed，1 skipped；Eval Gate PASSED。真实 Docker daemon 和 runtime image
 已执行验证，Local bubblewrap namespace 测试已执行。唯一 skip 是原生 Windows
 filesystem/Git 集成；未声称原生 Windows 验收通过。Windows traversal/drive/ADS/
 reserved-name/case-alias 路径校验已在 Linux 执行。`git diff --check` 通过。

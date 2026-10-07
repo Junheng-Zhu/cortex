@@ -10,6 +10,7 @@ import subprocess
 import threading
 import asyncio
 import tempfile
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -204,6 +205,46 @@ class ShadowGitSnapshotStore:
             self._git("init", "--bare", str(self.git_dir), git_dir=False)
         self._snapshots: dict[str, WorkspaceSnapshot] = {}
         self.lock = WorkspaceWriteLock.for_workspace(self.workspace)
+        self._directory_fd = None
+        self._directory_finalizer = None
+        self._closed = False
+        self._creation_time = None
+        if os.name == "nt":
+            # On Windows st_ctime is creation time before Python 3.12; newer
+            # versions expose it as st_birthtime. Directory writes do not change it.
+            self._creation_time = getattr(info, "st_birthtime", info.st_ctime)
+        else:
+            # Keep the original inode alive while this store exists. An unlinked
+            # directory cannot be mistaken for a newly allocated inode at its path.
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.workspace, flags)
+            self._directory_fd = fd
+            self._directory_finalizer = weakref.finalize(self, os.close, fd)
+            if (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != self.generation:
+                self.close()
+                raise RuntimeError("stale workspace generation")
+
+    def close(self) -> None:
+        """Release the generation handle; subsequent captures fail closed."""
+        self._closed = True
+        if self._directory_finalizer is not None:
+            self._directory_finalizer()
+
+    def _validate_generation(self) -> None:
+        if self._closed:
+            raise RuntimeError("snapshot store is closed")
+        try:
+            info = self.workspace.lstat()
+        except FileNotFoundError as error:
+            raise RuntimeError("stale workspace generation") from error
+        if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != self.generation:
+            raise RuntimeError("stale workspace generation")
+        if self._directory_fd is not None:
+            original = os.fstat(self._directory_fd)
+            if original.st_nlink == 0 or (original.st_dev, original.st_ino) != (info.st_dev, info.st_ino):
+                raise RuntimeError("stale workspace generation")
+        elif getattr(info, "st_birthtime", info.st_ctime) != self._creation_time:
+            raise RuntimeError("stale workspace generation")
 
     def _git(self, *args: str, input_data: bytes | None = None,
              git_dir: bool = True) -> str:
@@ -233,6 +274,7 @@ class ShadowGitSnapshotStore:
 
     def excluded_state(self):
         """Fingerprint excluded metadata; never describe it as reversible data."""
+        self._validate_generation()
         values = {}
         for root, dirs, files in os.walk(self.workspace, followlinks=False):
             relative = Path(root).relative_to(self.workspace)
@@ -256,9 +298,7 @@ class ShadowGitSnapshotStore:
 
     def _capture_files(self) -> tuple[WorkspaceFile, ...]:
         from .workspace_paths import safe_path, validate_manifest
-        info = self.workspace.stat()
-        if (info.st_dev, info.st_ino) != self.generation:
-            raise RuntimeError("stale workspace generation")
+        self._validate_generation()
         result = []
         for path in self._paths():
             relative = path.relative_to(self.workspace).as_posix()
