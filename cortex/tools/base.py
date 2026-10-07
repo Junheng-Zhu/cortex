@@ -64,6 +64,9 @@ class ToolError(Exception):
 
 
 class ToolNotFoundError(ToolError):
+    def __reduce__(self):
+        return type(self), (self.message, self.tool_name)
+
     def __init__(self, message: str, tool_name: str):
         self.message, self.tool_name = message, tool_name
         super().__init__(message)
@@ -73,6 +76,9 @@ class ToolNotFoundError(ToolError):
 
 
 class ToolSandboxError(ToolError):
+    def __reduce__(self):
+        return type(self), (self.message, self.tool_name, self.file_dir)
+
     def __init__(self, message: str, tool_name: str, file_dir: object):
         self.message, self.tool_name, self.file_dir = message, tool_name, file_dir
         super().__init__(message)

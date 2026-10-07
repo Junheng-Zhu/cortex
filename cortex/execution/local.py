@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import time
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -19,17 +20,43 @@ class LocalBackend(ExecutionBackend):
         bash_resolver: Callable[[], Path],
         max_output_chars: int = 10_000,
         workspace: Path | None = None,
+        isolated: bool = False,
     ):
         self._bash_resolver = bash_resolver
         self._max_output_chars = max_output_chars
         self.workspace = (workspace or Path.cwd()).resolve()
+        self.isolated = isolated
+
+    def _command(self, bash, request):
+        if not self.isolated:
+            return [str(bash), "-lc", request.command]
+        sandbox = shutil.which("bwrap") if os.name != "nt" else None
+        if not sandbox:
+            raise ExecutionUnavailableError("Isolated Local execution requires bubblewrap; use Docker on unsupported hosts")
+        command = [sandbox, "--die-with-parent", "--unshare-all", "--new-session"]
+        for directory in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
+            if Path(directory).exists():
+                command += ["--ro-bind", directory, directory]
+        command += ["--bind", str(self.workspace), "/workspace"]
+        # Recovery deliberately excludes runtime/Git metadata. Keep it read-only
+        # so a workspace-reversible shell cannot silently mutate excluded state.
+        for name in (".git", ".cortex"):
+            protected = self.workspace / name
+            if protected.exists():
+                command += ["--ro-bind", str(protected), "/workspace/" + name]
+        command += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+                    "--chdir",
+                    str(Path("/workspace") / request.cwd), "--setenv", "HOME", "/tmp",
+                    "--setenv", "PWD", str(Path("/workspace") / request.cwd),
+                    str(bash), "-lc", request.command]
+        return command
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         bash = self._bash_resolver()
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                [str(bash), "-lc", request.command], cwd=self._host_cwd(request.cwd),
+                self._command(bash, request), cwd=self._host_cwd(request.cwd),
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=request.timeout, check=False,
             )
@@ -60,7 +87,7 @@ class LocalBackend(ExecutionBackend):
         started = time.monotonic()
         try:
             process = await asyncio.create_subprocess_exec(
-                str(bash), "-lc", request.command,
+                *self._command(bash, request),
                 cwd=self._host_cwd(request.cwd),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=os.name != "nt",

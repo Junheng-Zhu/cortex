@@ -35,12 +35,22 @@ class DockerBackend(ExecutionBackend):
         with self._lock:
             if self._container is None:
                 workspace = self.config.workspace.resolve()
+                volumes = {str(workspace): {"bind": "/workspace", "mode": "rw"}}
+                if self.config.isolated:
+                    if (workspace / '.git').is_file() or (workspace / '.git').is_symlink():
+                        raise ExecutionError("isolated Docker requires private in-root Git metadata")
+                    for name in ('.git', '.cortex'):
+                        protected = workspace / name
+                        if protected.exists():
+                            volumes[str(protected)] = {"bind": "/workspace/" + name, "mode": "ro"}
                 try:
                     self._container = self._docker_client().containers.run(
                         self.config.image, command=["sleep", "infinity"], detach=True,
                         working_dir="/workspace", user=self.config.user,
-                        volumes={str(workspace): {"bind": "/workspace", "mode": "rw"}},
-                        network_disabled=self.config.network_disabled, read_only=True,
+                        volumes=volumes,
+                        network_disabled=self.config.network_disabled,
+                        network_mode="none" if self.config.network_disabled else "bridge",
+                        read_only=True,
                         tmpfs=self.config.tmpfs, cap_drop=["ALL"],
                         security_opt=["no-new-privileges:true"],
                         mem_limit=self.config.memory_limit, nano_cpus=self.config.nano_cpus,
