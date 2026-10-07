@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(frozen=True, slots=True)
 class DockerBackendConfig:
     workspace: Path
+    isolated: bool = False
     image: str = "cortex-execution-runtime:v1"
     memory_limit: str = "512m"
     nano_cpus: int = 1_000_000_000

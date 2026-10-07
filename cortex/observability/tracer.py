@@ -71,15 +71,16 @@ class RunSummary:
 class RunRecorder:
     """Records the protocol-level lifecycle of one agent run."""
 
-    def __init__(self, run_id: str | None = None, persist: bool = False):
+    def __init__(self, run_id: str | None = None, persist: bool = False, db_path: str | Path | None = None):
         self.run_id = run_id or str(uuid4())
         self._initial_run_id_available = run_id is not None
         self.persist = persist
+        self.db_path = Path(db_path) if db_path is not None else DB_PATH
         self.events: list[RunEvent] = []
         self.runs: list[RunSummary] = []
         self.current_run: RunSummary | None = None
         if persist:
-            init_db()
+            init_db(self.db_path)
 
     def start_run(self) -> RunSummary:
         """Start a fresh run, retaining earlier events and summaries."""
@@ -112,7 +113,7 @@ class RunRecorder:
         summary.latency_ms = latency_ms
         summary.termination_reason = termination_reason
         if self.persist:
-            _persist_run(summary)
+            _persist_run(summary, self.db_path)
         return summary
 
     def record(self, event_type: str, **data: Any) -> RunEvent:
@@ -133,7 +134,7 @@ class RunRecorder:
             elif event_type == "action":
                 self.current_run.tool_duration_ms += float(data.get("duration_ms", 0))
         if self.persist:
-            _persist_event(event)
+            _persist_event(event, self.db_path)
         return event
 
     @staticmethod
@@ -146,9 +147,10 @@ class RunRecorder:
         return len("" if output is None else str(output))
 
 
-def init_db() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
+def init_db(db_path: Path | None = None) -> None:
+    path = db_path or DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,8 +181,8 @@ def init_db() -> None:
         )
 
 
-def _persist_run(run: RunSummary) -> None:
-    with sqlite3.connect(DB_PATH) as conn:
+def _persist_run(run: RunSummary, db_path: Path | None = None) -> None:
+    with sqlite3.connect(db_path or DB_PATH) as conn:
         conn.execute(
             """INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
@@ -200,8 +202,8 @@ def _persist_run(run: RunSummary) -> None:
         )
 
 
-def _persist_event(event: RunEvent) -> None:
-    with sqlite3.connect(DB_PATH) as conn:
+def _persist_event(event: RunEvent, db_path: Path | None = None) -> None:
+    with sqlite3.connect(db_path or DB_PATH) as conn:
         conn.execute(
             """INSERT INTO traces
                (session_id, timestamp, step_type, content, duration_ms,

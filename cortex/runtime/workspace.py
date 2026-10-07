@@ -9,12 +9,21 @@ import stat
 import subprocess
 import threading
 import asyncio
+import tempfile
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
+
+
+def git_environment():
+    """User Git selectors must never redirect the shadow database/index."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_OPTIONAL_LOCKS": "0"})
+    return env
 
 
 class WorkspaceOperation(str, Enum):
@@ -62,42 +71,122 @@ class WorkspaceDiff:
 
 
 class WorkspaceWriteLock:
-    """Cross-mode, process-wide exclusive ownership for one workspace.
+    """Workspace-scoped READ/WRITE ownership across sync, async and processes.
 
-    ``threading.Lock`` is intentionally used rather than ``RLock``: async
-    contenders poll its non-blocking acquire operation, so cancellation cannot
-    strand a background waiter. Recovery internals use the store's unlocked
-    primitives after taking ownership once, avoiding re-entrant acquisition.
+    Windows conservatively serializes readers; POSIX readers use shared flock.
     """
-
     _guard = threading.Lock()
-    _locks: dict[str, "WorkspaceWriteLock"] = {}
+    _locks = {}
 
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
+    def __init__(self, key=""):
+        self._key = key
+        self._mutex = threading.Lock()
+        self._readers = 0
+        self._writer = False
+        self._file = None
+
+    def _try(self, read=False):
+        with self._mutex:
+            if self._writer or ((not read or os.name == "nt") and self._readers):
+                return None
+            directory = Path(tempfile.gettempdir()) / "cortex-workspace-locks"
+            directory.mkdir(exist_ok=True)
+            handle = open(directory / hashlib.sha256(self._key.encode()).hexdigest(), "a+b")
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    if not handle.read(1):
+                        handle.write(b"0")
+                        handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), (fcntl.LOCK_SH if read else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+            except OSError:
+                handle.close()
+                return None
+            if read:
+                self._readers += 1
+            else:
+                self._writer = True
+            return handle
+
+    def _release(self, handle, read=False):
+        with self._mutex:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+            if read:
+                self._readers -= 1
+            else:
+                self._writer = False
 
     def __enter__(self):
-        self._lock.acquire()
-        return self
+        import time
+        while True:
+            handle = self._try()
+            if handle is not None:
+                self._file = handle
+                return self
+            time.sleep(0.01)
 
-    def __exit__(self, *_args) -> None:
-        self._lock.release()
+    def __exit__(self, *_args):
+        self.release()
 
-    async def acquire_async(self) -> None:
-        # Polling a non-blocking process-local lock keeps the event loop safe
-        # and, unlike cancelling ``to_thread(lock.acquire)``, cannot leave a
-        # background waiter that later acquires an orphaned lock.
-        while not self._lock.acquire(blocking=False):
+    async def acquire_async(self):
+        while True:
+            handle = self._try()
+            if handle is not None:
+                self._file = handle
+                return
             await asyncio.sleep(0.01)
 
-    def release(self) -> None:
-        self._lock.release()
+    def release(self):
+        handle, self._file = self._file, None
+        self._release(handle)
+
+    def read(self):
+        return WorkspaceReadOwnership(self)
 
     @classmethod
-    def for_workspace(cls, workspace: str | Path) -> "WorkspaceWriteLock":
-        key = str(Path(workspace).resolve())
+    def for_workspace(cls, workspace):
+        key = os.path.normcase(str(Path(workspace).resolve()))
         with cls._guard:
-            return cls._locks.setdefault(key, cls())
+            return cls._locks.setdefault(key, cls(key))
+
+
+class WorkspaceReadOwnership:
+    def __init__(self, lock):
+        self.lock, self.handle = lock, None
+
+    def __enter__(self):
+        import time
+        while self.handle is None:
+            self.handle = self.lock._try(read=True)
+            if self.handle is None:
+                time.sleep(0.01)
+        return self
+
+    async def acquire_async(self):
+        while self.handle is None:
+            self.handle = self.lock._try(read=True)
+            if self.handle is None:
+                await asyncio.sleep(0.01)
+
+    def release(self):
+        if self.handle is not None:
+            self.lock._release(self.handle, read=True)
+            self.handle = None
+
+    def __exit__(self, *_args):
+        self.release()
 
 
 class ShadowGitSnapshotStore:
@@ -105,7 +194,9 @@ class ShadowGitSnapshotStore:
 
     def __init__(self, workspace: str | Path, store_root: str | Path | None = None):
         self.workspace = Path(workspace).resolve()
-        identity = hashlib.sha256(str(self.workspace).encode()).hexdigest()
+        info = self.workspace.stat()
+        self.generation = (info.st_dev, info.st_ino)
+        identity = hashlib.sha256(os.path.normcase(str(self.workspace)).encode()).hexdigest()
         self.workspace_id = identity
         root = Path(store_root or (Path.home() / ".cortex" / "workspace-snapshots"))
         self.git_dir = root.expanduser().resolve() / identity / "shadow.git"
@@ -114,6 +205,46 @@ class ShadowGitSnapshotStore:
             self._git("init", "--bare", str(self.git_dir), git_dir=False)
         self._snapshots: dict[str, WorkspaceSnapshot] = {}
         self.lock = WorkspaceWriteLock.for_workspace(self.workspace)
+        self._directory_fd = None
+        self._directory_finalizer = None
+        self._closed = False
+        self._creation_time = None
+        if os.name == "nt":
+            # On Windows st_ctime is creation time before Python 3.12; newer
+            # versions expose it as st_birthtime. Directory writes do not change it.
+            self._creation_time = getattr(info, "st_birthtime", info.st_ctime)
+        else:
+            # Keep the original inode alive while this store exists. An unlinked
+            # directory cannot be mistaken for a newly allocated inode at its path.
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.workspace, flags)
+            self._directory_fd = fd
+            self._directory_finalizer = weakref.finalize(self, os.close, fd)
+            if (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != self.generation:
+                self.close()
+                raise RuntimeError("stale workspace generation")
+
+    def close(self) -> None:
+        """Release the generation handle; subsequent captures fail closed."""
+        self._closed = True
+        if self._directory_finalizer is not None:
+            self._directory_finalizer()
+
+    def _validate_generation(self) -> None:
+        if self._closed:
+            raise RuntimeError("snapshot store is closed")
+        try:
+            info = self.workspace.lstat()
+        except FileNotFoundError as error:
+            raise RuntimeError("stale workspace generation") from error
+        if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != self.generation:
+            raise RuntimeError("stale workspace generation")
+        if self._directory_fd is not None:
+            original = os.fstat(self._directory_fd)
+            if original.st_nlink == 0 or (original.st_dev, original.st_ino) != (info.st_dev, info.st_ino):
+                raise RuntimeError("stale workspace generation")
+        elif getattr(info, "st_birthtime", info.st_ctime) != self._creation_time:
+            raise RuntimeError("stale workspace generation")
 
     def _git(self, *args: str, input_data: bytes | None = None,
              git_dir: bool = True) -> str:
@@ -121,18 +252,18 @@ class ShadowGitSnapshotStore:
         if git_dir:
             command += [f"--git-dir={self.git_dir}"]
         result = subprocess.run(command + list(args), input=input_data,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=git_environment())
         if result.returncode:
             raise RuntimeError(result.stderr.decode(errors="replace").strip())
         return result.stdout.decode().strip()
 
     def _paths(self) -> Iterable[Path]:
         for root, dirs, files in os.walk(self.workspace, topdown=True, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if d not in {".git", ".cortex"})
+            dirs[:] = sorted(d for d in dirs if d.casefold() not in {".git", ".cortex"})
             for name in sorted(files):
                 path = Path(root) / name
                 relative = path.relative_to(self.workspace)
-                if relative.parts[0] not in {".git", ".cortex"}:
+                if not any(p.casefold() in {".git", ".cortex"} for p in relative.parts):
                     yield path
             # os.walk puts symlinked directories in dirs; snapshot the link,
             # rather than following or silently losing it.
@@ -141,25 +272,56 @@ class ShadowGitSnapshotStore:
             for name in links:
                 yield Path(root) / name
 
+    def excluded_state(self):
+        """Fingerprint excluded metadata; never describe it as reversible data."""
+        self._validate_generation()
+        values = {}
+        for root, dirs, files in os.walk(self.workspace, followlinks=False):
+            relative = Path(root).relative_to(self.workspace)
+            excluded = any(p.casefold() in {".git", ".cortex"} for p in relative.parts)
+            if excluded:
+                values[relative.as_posix() + "/"] = "directory"
+            for name in files + [d for d in dirs if (Path(root) / d).is_symlink()]:
+                path = Path(root) / name
+                rel = path.relative_to(self.workspace)
+                if not excluded and name.casefold() not in {".git", ".cortex"}:
+                    continue
+                info = path.lstat()
+                if path.is_symlink():
+                    data = os.readlink(path).encode()
+                elif stat.S_ISREG(info.st_mode):
+                    data = path.read_bytes()
+                else:
+                    raise ValueError("unsupported excluded metadata file type")
+                values[rel.as_posix()] = str(info.st_mode) + ":" + hashlib.sha256(data).hexdigest()
+        return values
+
     def _capture_files(self) -> tuple[WorkspaceFile, ...]:
+        from .workspace_paths import safe_path, validate_manifest
+        self._validate_generation()
         result = []
         for path in self._paths():
             relative = path.relative_to(self.workspace).as_posix()
+            safe_path(self.workspace, relative)
             if path.is_symlink():
                 data = os.readlink(path).encode()
                 mode = "120000"
             else:
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    raise ValueError(f"unsupported workspace file type: {relative}")
                 data = path.read_bytes()
                 mode = "100755" if path.stat().st_mode & stat.S_IXUSR else "100644"
             oid = self._git("hash-object", "-w", "--stdin", input_data=data)
             result.append(WorkspaceFile(relative, oid, mode))
-        return tuple(sorted(result, key=lambda item: item.path))
+        files = tuple(sorted(result, key=lambda item: item.path))
+        validate_manifest(self.workspace, files, self.blob)
+        return files
 
     def _tree(self, files: tuple[WorkspaceFile, ...]) -> str:
         # A temporary index lets Git build nested trees without touching either
         # the user's index or working tree.
         index = self.git_dir.parent / f"index-{uuid4().hex}"
-        env = os.environ.copy()
+        env = git_environment()
         env.update({"GIT_DIR": str(self.git_dir), "GIT_INDEX_FILE": str(index)})
         try:
             for item in files:
@@ -191,7 +353,7 @@ class ShadowGitSnapshotStore:
         args = ["commit-tree", tree, "-m", "Cortex workspace snapshot"]
         if parent:
             args[2:2] = ["-p", parent]
-        env = os.environ.copy()
+        env = git_environment()
         env.update({"GIT_AUTHOR_NAME": "Cortex", "GIT_AUTHOR_EMAIL": "cortex@localhost",
                     "GIT_COMMITTER_NAME": "Cortex", "GIT_COMMITTER_EMAIL": "cortex@localhost"})
         proc = subprocess.run(["git", f"--git-dir={self.git_dir}", *args], env=env,
@@ -210,7 +372,7 @@ class ShadowGitSnapshotStore:
             return cached
         proc = subprocess.run(
             ["git", f"--git-dir={self.git_dir}", "ls-tree", "-rz", "-r", snapshot_id],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=git_environment(),
         )
         if proc.returncode:
             return None
@@ -231,7 +393,7 @@ class ShadowGitSnapshotStore:
     def _has_head(self) -> bool:
         proc = subprocess.run(["git", f"--git-dir={self.git_dir}", "rev-parse", "--verify",
                                "refs/heads/snapshots"], stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL)
+                              stderr=subprocess.DEVNULL, env=git_environment())
         return proc.returncode == 0
 
     def diff(self, before: WorkspaceSnapshot,
@@ -257,6 +419,10 @@ class ShadowGitSnapshotStore:
                                            new.content_hash if new else None))
         return WorkspaceDiff(tuple(changes))
 
+    def blob(self, oid: str) -> bytes:
+        return subprocess.run(["git", f"--git-dir={self.git_dir}", "cat-file", "blob", oid],
+                              check=True, stdout=subprocess.PIPE, env=git_environment()).stdout
+
     def restore(self, snapshot: WorkspaceSnapshot) -> None:
         if snapshot.workspace_id != self.workspace_id:
             raise ValueError("snapshot belongs to a different workspace")
@@ -267,6 +433,13 @@ class ShadowGitSnapshotStore:
         """Restore while the caller already owns ``lock``."""
         if snapshot.workspace_id != self.workspace_id:
             raise ValueError("snapshot belongs to a different workspace")
+        from .workspace_paths import validate_manifest
+        self._capture_files()  # Generation, path and current file-type preflight.
+        validate_manifest(self.workspace, snapshot.files, self.blob)
+        for item in snapshot.files:
+            leaf = self.workspace / item.path
+            if leaf.is_dir() and not leaf.is_symlink():
+                raise ValueError("directory collision during full restore: " + item.path)
         wanted = {item.path: item for item in snapshot.files}
         for path in sorted(self._paths(), key=lambda p: len(p.parts), reverse=True):
             relative = path.relative_to(self.workspace).as_posix()
@@ -284,7 +457,7 @@ class ShadowGitSnapshotStore:
                 else:
                     path.unlink()
             data = subprocess.run(["git", f"--git-dir={self.git_dir}", "cat-file", "blob",
-                                   item.content_hash], check=True, stdout=subprocess.PIPE).stdout
+                                   item.content_hash], check=True, stdout=subprocess.PIPE, env=git_environment()).stdout
             if item.mode == "120000":
                 os.symlink(data.decode(), path)
             else:

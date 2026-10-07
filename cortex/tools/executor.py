@@ -71,6 +71,9 @@ class ToolExecutor:
         self.max_retries = 5
         self.max_tool_concurrency = max_tool_concurrency
         self.recovery_runtime = recovery_runtime
+        self.workspace_lock = recovery_runtime.snapshots.lock if recovery_runtime else None
+        self.workspace_guard = None
+        self._closed = False
         self.last_batch_metrics: dict[str, Any] = {}
         # These are executor-owned, so concurrent batches/runs share limits.
         self._concurrency_semaphore = asyncio.Semaphore(max_tool_concurrency)
@@ -270,6 +273,7 @@ class ToolExecutor:
 
     def close(self) -> None:
         """Idempotently release resources owned by registered tools."""
+        self._closed = True
         first_error = None
         for name in self.registry.list_tools():
             try:
@@ -290,6 +294,8 @@ class ToolExecutor:
         self, tool_name: str, arguments,
         context: ToolExecutionContext | None = None,
     ) -> ToolResult:
+        if self._closed:
+            raise RuntimeError("ToolExecutor is closed")
         start = time.perf_counter()
         tool = self._get_tool(tool_name)
         if not self._check_permission(tool):
@@ -318,6 +324,7 @@ class ToolExecutor:
                 validation_passed=False,
             )
 
+        ownership = None
         boundary = None
         direct_boundary = False
         if (tool.side_effect_policy is SideEffectPolicy.WORKSPACE_REVERSIBLE and
@@ -335,13 +342,27 @@ class ToolExecutor:
                 wave_id=context.wave_id,
                 side_effect_policy=tool.side_effect_policy.value,
             )
+        if boundary is None and self.workspace_lock is not None:
+            from .permission import Permission
+            lock = self.workspace_lock
+            ownership = lock.read() if tool.permission is Permission.READ else lock
+            ownership.__enter__()
         try:
+            if self._closed:
+                raise RuntimeError("ToolExecutor is closed")
+            if self.workspace_guard:
+                self.workspace_guard()
             tool_result = self._execute_with_retry(
                 tool, validated_input,
                 allow_retry=tool.side_effect_policy is not SideEffectPolicy.WORKSPACE_REVERSIBLE,
             )
             if boundary is not None:
                 boundary.capture_after_execution()
+                if boundary.unsupported_paths:
+                    tool_result.success = False
+                    tool_result.error_type = "ToolSandboxError"
+                    tool_result.error_message = "Excluded metadata changed; discard this isolated session: " + ", ".join(boundary.unsupported_paths)
+                    tool_result.data = None
                 tool_result.mutation_boundary = boundary
                 if direct_boundary:
                     boundary.commit(context.state, reason="direct_execution")
@@ -350,6 +371,9 @@ class ToolExecutor:
             if boundary is not None:
                 boundary.cancel(context.state)
             raise
+        finally:
+            if ownership is not None:
+                ownership.release()
         tool_result.validation_passed = True
         end = time.perf_counter()
         tool_result.duration_ms = int((end - start) * 1000)
@@ -360,6 +384,8 @@ class ToolExecutor:
         context: ToolExecutionContext | None = None,
     ) -> ToolResult:
         """Execute one tool without blocking the event loop."""
+        if self._closed:
+            raise RuntimeError("ToolExecutor is closed")
         start = time.perf_counter()
         try:
             tool = self._get_tool(tool_name)
@@ -376,6 +402,7 @@ class ToolExecutor:
         except ValidationError as exc:
             return ToolResult(tool.name, 0, 0, False, "ToolValidationError",
                               str(exc), None, False)
+        ownership = None
         boundary = None
         direct_boundary = False
         if (tool.side_effect_policy is SideEffectPolicy.WORKSPACE_REVERSIBLE and
@@ -393,13 +420,27 @@ class ToolExecutor:
                 wave_id=context.wave_id,
                 side_effect_policy=tool.side_effect_policy.value,
             )
+        if boundary is None and self.workspace_lock is not None:
+            from .permission import Permission
+            lock = self.workspace_lock
+            ownership = lock.read() if tool.permission is Permission.READ else lock
+            await ownership.acquire_async()
         try:
+            if self._closed:
+                raise RuntimeError("ToolExecutor is closed")
+            if self.workspace_guard:
+                self.workspace_guard()
             result = await self._aexecute_with_retry(
                 tool, validated,
                 allow_retry=tool.side_effect_policy is not SideEffectPolicy.WORKSPACE_REVERSIBLE,
             )
             if boundary is not None:
                 boundary.capture_after_execution()
+                if boundary.unsupported_paths:
+                    result.success = False
+                    result.error_type = "ToolSandboxError"
+                    result.error_message = "Excluded metadata changed; discard this isolated session: " + ", ".join(boundary.unsupported_paths)
+                    result.data = None
                 result.mutation_boundary = boundary
                 if direct_boundary:
                     boundary.commit(context.state, reason="direct_execution")
@@ -412,6 +453,9 @@ class ToolExecutor:
             if boundary is not None:
                 boundary.cancel(context.state)
             raise
+        finally:
+            if ownership is not None:
+                ownership.release()
         result.validation_passed = True
         result.duration_ms = int((time.perf_counter() - start) * 1000)
         return result
