@@ -114,3 +114,36 @@ def test_windows_prefers_git_bash(monkeypatch, tmp_path: Path):
 def test_shell_contract_has_only_the_stable_inputs():
     assert set(ShellInput.model_fields) == {"command", "cwd", "timeout"}
     assert "Bash/POSIX" in ShellTool.description
+
+
+@pytest.mark.parametrize('location', ['/bin/bash', '/usr/bin/bash', 'PATH'])
+def test_posix_bash_discovery_supports_standard_locations_and_path(monkeypatch, tmp_path, location):
+    path_bash = tmp_path / 'custom-bin/bash'
+    path_bash.parent.mkdir()
+    path_bash.touch()
+    expected = path_bash if location == 'PATH' else Path(location)
+    monkeypatch.setattr(shell_runtime.sys, 'platform', 'linux')
+    monkeypatch.setattr(Path, 'is_file', lambda path: path == expected)
+    monkeypatch.setattr(shell_runtime.os, 'access', lambda *args: True)
+    monkeypatch.setattr(shell_runtime.shutil, 'which', lambda name: str(path_bash) if name == 'bash' else None)
+    assert shell_runtime.discover_bash() == expected.resolve()
+
+
+def test_windows_bash_discovery_supports_path(monkeypatch, tmp_path):
+    bash = tmp_path / 'bash.exe'
+    bash.touch()
+    monkeypatch.setattr(shell_runtime.sys, 'platform', 'win32')
+    for name in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(shell_runtime.os, 'access', lambda *args: True)
+    monkeypatch.setattr(shell_runtime.shutil, 'which', lambda name: str(bash) if name == 'bash.exe' else None)
+    assert shell_runtime.discover_bash() == bash.resolve()
+
+
+@pytest.mark.parametrize('platform', ['linux', 'win32'])
+def test_discovery_without_bash_reports_unavailable(monkeypatch, platform):
+    monkeypatch.setattr(shell_runtime.sys, 'platform', platform)
+    monkeypatch.setattr(Path, 'is_file', lambda path: False)
+    monkeypatch.setattr(shell_runtime.shutil, 'which', lambda name: None)
+    with pytest.raises(ShellUnavailableError, match='Bash is unavailable'):
+        shell_runtime.discover_bash()

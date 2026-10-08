@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from .workspace import ShadowGitSnapshotStore, WorkspaceWriteLock, git_environment
 from .workspace_paths import validate_manifest, safe_path, write_file
+from .workspace_cleanup import _remove_tree
 from .execution_checkpoint import RecoveryResult
 
 
@@ -55,7 +56,7 @@ class SnapshotWorkspaceProvider:
             '-c', 'user.email=cortex@localhost', 'commit', '--allow-empty', '-qm', 'Workspace BASE'], check=True, env=git_environment())
 
     def remove(self, main, destination):
-        shutil.rmtree(destination)
+        _remove_tree(destination)
 
 
 class GitWorktreeProvider(SnapshotWorkspaceProvider):
@@ -76,8 +77,8 @@ class GitWorktreeProvider(SnapshotWorkspaceProvider):
                         str(repository), str(metadata)], check=True, env=git_environment())
         (destination / '.git').unlink()
         shutil.move(str(metadata / '.git'), destination / '.git')
-        shutil.rmtree(metadata)
-        shutil.rmtree(repository)
+        _remove_tree(metadata)
+        _remove_tree(repository)
         subprocess.run(['git', '-C', str(destination), 'update-ref', '--no-deref', 'HEAD', head], check=True, env=git_environment())
         subprocess.run(['git', '-C', str(destination), 'reset', '--mixed', '--quiet', head], check=True, env=git_environment())
         # Includes ignored files present in BASE, even for a clean Git status.
@@ -192,10 +193,17 @@ class WorkspaceManager:
                     execution = self.snapshots(destination)
                     if execution.snapshot().manifest_hash != base.manifest_hash:
                         raise RuntimeError('isolated BASE verification failed')
-                except BaseException:
+                except BaseException as create_error:
+                    cleanup_error = None
                     for resource in (destination, destination.parent / (destination.name + '-git'),
                                      destination.parent / (destination.name + '-metadata')):
-                        shutil.rmtree(resource, ignore_errors=True)
+                        try:
+                            _remove_tree(resource)
+                        except Exception as error:
+                            if cleanup_error is None:
+                                cleanup_error = error
+                    if cleanup_error is not None:
+                        raise cleanup_error from create_error
                     raise
             else:
                 destination = main_root
@@ -411,6 +419,6 @@ class WorkspaceManager:
                 execution.snapshot_unlocked()
             except ValueError as error:
                 session.audit_note = "Discard retained prior snapshots; final snapshot unsupported: " + str(error)
-            shutil.rmtree(session.execution_root)
+            _remove_tree(session.execution_root)
             session.status = 'DISCARDED'
             self.save(session)
