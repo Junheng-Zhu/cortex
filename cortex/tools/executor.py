@@ -26,6 +26,9 @@ class ToolExecutionContext:
     state: "AgentState"
     action_id: str
     wave_id: str | None = None
+    before_execution: "Callable[[], None] | None" = None
+    # Optional generic durable-boundary observer; no transport dependency.
+    on_mutation_begin: "Callable[[MutationBoundary], None] | None" = None
 
 
 @dataclass
@@ -189,8 +192,9 @@ class ToolExecutor:
         else:
             return False
 
+    @staticmethod
     def _worker_with_queur(
-        self, tool: Tool, validated_input, queue: multiprocessing.Queue, attempts: int
+        tool: Tool, validated_input, queue: multiprocessing.Queue, attempts: int
     ) -> ExecutionOutcome:
         try:
             result = tool.execute(validated_input)
@@ -241,6 +245,7 @@ class ToolExecutor:
             p.join()
             tool_queue.close()
             tool_queue.join_thread()
+            p.close()
 
             if outcome.success:
                 return self._result(tool, outcome)
@@ -352,6 +357,10 @@ class ToolExecutor:
                 raise RuntimeError("ToolExecutor is closed")
             if self.workspace_guard:
                 self.workspace_guard()
+            if context is not None and context.before_execution:
+                context.before_execution()
+            if boundary is not None and context.on_mutation_begin:
+                context.on_mutation_begin(boundary)
             tool_result = self._execute_with_retry(
                 tool, validated_input,
                 allow_retry=tool.side_effect_policy is not SideEffectPolicy.WORKSPACE_REVERSIBLE,
@@ -430,6 +439,10 @@ class ToolExecutor:
                 raise RuntimeError("ToolExecutor is closed")
             if self.workspace_guard:
                 self.workspace_guard()
+            if context is not None and context.before_execution:
+                context.before_execution()
+            if boundary is not None and context.on_mutation_begin:
+                context.on_mutation_begin(boundary)
             result = await self._aexecute_with_retry(
                 tool, validated,
                 allow_retry=tool.side_effect_policy is not SideEffectPolicy.WORKSPACE_REVERSIBLE,
@@ -516,6 +529,7 @@ class ToolExecutor:
         finally:
             result_queue.close()
             result_queue.join_thread()
+            process.close()
 
     async def aexecute_many(
         self, calls: list[tuple[str, dict[str, Any]]]

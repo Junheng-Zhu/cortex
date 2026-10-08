@@ -50,6 +50,8 @@ def build_agent(
     workspace_session: WorkspaceSession | None = None,
     workspace_owner_id: str = "user",
     max_tool_concurrency: int = 4,
+    distributed_execution_client=None,
+    distributed_tool_names: set[str] | None = None,
     workspace_recovery_enabled: bool = True,
     workspace_recovery_runtime: WorkspaceRecoveryRuntime | None = None,
     workspace_snapshot_store: ShadowGitSnapshotStore | None = None,
@@ -158,13 +160,25 @@ def build_agent(
             mutation_ledger,
             runtime_recorder,
         )
-    executor = ToolExecutor(
+    executor_type = ToolExecutor
+    distributed_options = {}
+    if distributed_execution_client is not None:
+        from cortex.distributed.executor import DistributedToolExecutor
+        if not distributed_tool_names:
+            raise ValueError('distributed execution requires explicit distributed_tool_names')
+        executor_type = DistributedToolExecutor
+        distributed_options = dict(distributed_client=distributed_execution_client,
+                                   distributed_tools=distributed_tool_names)
+    elif distributed_tool_names:
+        raise ValueError('distributed_tool_names requires distributed_execution_client')
+    executor = executor_type(
         allowed_permissions
         if allowed_permissions is not None
         else set(Permission),
         registry,
         max_tool_concurrency=max_tool_concurrency,
         recovery_runtime=recovery,
+        **distributed_options,
     )
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore(isolated_storage / "memory.db") if isolated_storage else SQLiteMemoryStore())
     episodic_store = session_store or (SQLiteSessionStore(isolated_storage / "sessions.db") if isolated_storage else SQLiteSessionStore())
