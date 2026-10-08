@@ -45,7 +45,7 @@ flowchart LR
 ```
 
 Core Runtime code consumes interfaces. Only the Redis adapter and composition
-root know keys or Redis APIs. Arguments, results and recovery payloads are stored
+root know keys or Redis APIs. Arguments, results, recovery payloads and filesystem generations are stored
 as opaque JSON strings inside Lua-managed metadata: Redis cjson must not change
 empty arrays into objects or round large user numbers. The adapter has bounded,
 rotating Pending/task scans so live old entries do not starve newer stale tasks.
@@ -360,7 +360,7 @@ spawned Python workers, and the existing `cortex-execution-runtime:v1` Docker im
 
 ```bash
 CORTEX_TEST_REDIS_URL=redis://localhost:6380/15 CORTEX_RUN_DOCKER_TESTS=1 python -m pytest -q -rs
-# 238 passed, 1 skipped; no resource-cleanup warnings
+# 239 passed, 1 skipped; no resource-cleanup warnings
 python eval/smoke_eval.py
 # EVAL GATE: PASSED
 ```

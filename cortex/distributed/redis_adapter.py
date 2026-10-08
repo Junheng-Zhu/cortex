@@ -10,6 +10,9 @@ from .interfaces import QueueMessage
 from .models import ExecutionTask, ExecutionState, InfrastructureUnavailable, OwnershipLost
 
 
+JSON_FIELDS = ('arguments', 'result', 'outcome', 'error', 'recovery', 'workspace_generation')
+
+
 def guarded(method):
     @wraps(method)
     def call(*args, **kwargs):
@@ -151,7 +154,7 @@ class RedisExecutionStore:
         values.pop('fingerprint', None)
         # User JSON is opaque to Lua: cjson would otherwise convert [] to {}
         # and truncate large numbers on each lifecycle mutation.
-        for field in ('arguments', 'result', 'outcome', 'error', 'recovery'):
+        for field in JSON_FIELDS:
             values[field] = json.loads(values.pop(field + '_json'))
         return ExecutionTask(**values)
 
@@ -162,7 +165,7 @@ class RedisExecutionStore:
             raise ValueError('Only a fresh CREATED task can be submitted')
         idem = hashlib.sha256(task.idempotency_key.encode()).hexdigest()
         payload = task.to_dict()
-        for field in ('arguments', 'result', 'outcome', 'error', 'recovery'):
+        for field in JSON_FIELDS:
             payload[field + '_json'] = json.dumps(payload.pop(field), allow_nan=False)
         return self.decode(self._create(keys=[self.prefix+task.execution_id,
             self.namespace+':idempotency:'+idem, self.namespace+':executions'],
@@ -188,7 +191,7 @@ class RedisExecutionStore:
 
     @guarded
     def _op(self, execution_id, operation, **arguments):
-        for field in ('arguments', 'result', 'outcome', 'error', 'recovery'):
+        for field in JSON_FIELDS:
             if field in arguments:
                 arguments[field + '_json'] = json.dumps(arguments.pop(field), allow_nan=False)
         try:

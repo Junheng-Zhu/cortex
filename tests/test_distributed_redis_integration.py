@@ -682,3 +682,18 @@ def test_direct_distributed_excluded_metadata_is_not_treated_as_reversible(clust
             executor.recovery_runtime.rollback_action(task.execution_id + ':attempt:1')
     finally: executor.close(); close_recovery(executor)
     no_pending(cluster)
+
+
+def test_large_native_filesystem_generation_roundtrips_exactly(cluster):
+    # NTFS inode IDs can exceed cjson's exact-number encoding precision. Root
+    # identity must never be rounded just because lifecycle state was mutated.
+    generation = [123456789012345, 9288674231451964968]
+    task = ExecutionTask('generation', 'probe', {}, 'generation',
+                         workspace_root='C:/workspace', workspace_generation=generation)
+    created = cluster[4].create(task)
+    cluster[4].queued(created.execution_id)
+    claimed = cluster[4].acquire(created.execution_id, 'owner', 5)
+    assert claimed.workspace_generation == generation
+    cluster[4].start(claimed.lease)
+    cluster[4].finish(claimed.lease, True, {})
+    assert cluster[4].get(created.execution_id).workspace_generation == generation
