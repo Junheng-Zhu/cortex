@@ -358,3 +358,5 @@ Detailed design documents are available under `docs/`:
 ---
 
 Cortex is an engineering-focused learning and experimentation project for building understandable, testable, and increasingly production-like agent runtimes.
+
+Distributed execution is opt-in. See [Distributed Worker Runtime V1](docs/distributed-worker-runtime-v1.md) for Redis setup, independent workers, recovery semantics and local multi-process tests.

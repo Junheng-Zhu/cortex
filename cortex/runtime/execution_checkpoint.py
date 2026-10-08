@@ -262,11 +262,11 @@ class WorkspaceRecoveryRuntime:
         legacy = head(session_id)
         return legacy if legacy and self.snapshots.load(legacy.workspace_snapshot_id) else None
 
-    def rollback_action(self, action_id: str, *, state=None, preview=False):
+    def rollback_action(self, action_id: str, *, state=None, preview=False, before_restore=None):
         records = self.ledger.query(action_id=action_id)
         if not records:
             raise KeyError(action_id)
-        return self._selective(records, state=state, preview=preview)
+        return self._selective(records, state=state, preview=preview, before_restore=before_restore)
 
     def undo_action(self, action_id: str, *, state=None, preview=False):
         """Undo by appending a protected compensation; returns its redo action id."""
@@ -284,7 +284,7 @@ class WorkspaceRecoveryRuntime:
             raise KeyError(target)
         return self._selective(selected, state=state, preview=preview)
 
-    def _selective(self, records, *, state, preview):
+    def _selective(self, records, *, state, preview, before_restore=None):
         from .workspace import WorkspaceFile
         from .workspace_paths import validate_manifest, write_file
         from .observation import Observation
@@ -335,11 +335,16 @@ class WorkspaceRecoveryRuntime:
                 else:
                     files[path] = item
             validate_manifest(self.snapshots.workspace, files.values(), self.snapshots.blob)
+            # Optional ownership fence runs under the existing workspace lock.
+            if before_restore:
+                before_restore()
             # A full pre-boundary remains a recovery target if a write fails.
             self._checkpoint_unlocked(state, reason="before_selective_rollback", wave_id=None,
                                       action_ids=(), snapshot=current)
             try:
                 for path, item in desired.items():
+                    if before_restore:
+                        before_restore()
                     write_file(self.snapshots.workspace, path, item, self.snapshots.blob)
             except BaseException:
                 for path in desired:
