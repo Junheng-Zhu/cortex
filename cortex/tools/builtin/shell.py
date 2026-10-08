@@ -73,7 +73,10 @@ def discover_bash() -> Path:
             )
         )
     else:
-        candidates = [Path("/bin/bash")]
+        candidates = [Path("/bin/bash"), Path("/usr/bin/bash")]
+        discovered = shutil.which("bash")
+        if discovered:
+            candidates.append(Path(discovered))
 
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):

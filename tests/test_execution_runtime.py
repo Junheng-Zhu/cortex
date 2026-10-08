@@ -7,7 +7,7 @@ from cortex.execution import (
     DockerBackend, DockerBackendConfig, ExecutionBackend, ExecutionRequest,
     ExecutionResult, LocalBackend,
 )
-from cortex.tools.builtin.shell import ShellInput, ShellTool
+from cortex.tools.builtin.shell import ShellInput, ShellTool, discover_bash
 from cortex.tools.executor import ToolExecutor
 from cortex.tools.permission import Permission
 from cortex.tools.registry import ToolRegistry
@@ -74,7 +74,7 @@ def test_build_agent_wires_backend_and_workspace_into_shell(tmp_path: Path):
 
 def test_local_backend_captures_and_truncates(tmp_path: Path):
     result = LocalBackend(
-        lambda: Path("/bin/bash"), max_output_chars=3, workspace=tmp_path
+        discover_bash, max_output_chars=3, workspace=tmp_path
     ).execute(
         ExecutionRequest("printf abcdef; printf error >&2", Path("."), 10)
     )

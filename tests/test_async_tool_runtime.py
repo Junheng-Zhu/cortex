@@ -13,7 +13,7 @@ from cortex.tools.executor import ToolExecutor
 from cortex.tools.permission import Permission
 from cortex.tools.registry import ToolRegistry
 from cortex.execution import LocalBackend
-from cortex.tools.builtin.shell import ShellInput, ShellTool
+from cortex.tools.builtin.shell import ShellInput, ShellTool, discover_bash
 from cortex.tools.builtin.notes import ListNotesTool, ReadNoteTool
 from cortex.runtime.loop import AgentLoop
 from cortex.llm.protocol import LLMResponse, ToolCall
@@ -142,7 +142,7 @@ async def test_process_supervision_cancellation_terminates_child():
 
 @pytest.mark.asyncio
 async def test_local_shell_cancellation_kills_underlying_process(tmp_path):
-    backend = LocalBackend(lambda: Path("/bin/bash"), workspace=tmp_path)
+    backend = LocalBackend(discover_bash, workspace=tmp_path)
     tool = ShellTool(backend, tmp_path)
     task = asyncio.create_task(tool.aexecute(
         ShellInput(command="sleep 0.4; touch should-not-exist", timeout=2)

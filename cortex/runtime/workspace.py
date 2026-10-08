@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import stat
 import subprocess
 import threading
@@ -17,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
+
+from .workspace_cleanup import _remove_tree
 
 
 def git_environment():
@@ -445,7 +446,7 @@ class ShadowGitSnapshotStore:
             relative = path.relative_to(self.workspace).as_posix()
             if relative not in wanted:
                 if path.is_dir() and not path.is_symlink():
-                    shutil.rmtree(path)
+                    _remove_tree(path)
                 else:
                     path.unlink(missing_ok=True)
         for relative, item in wanted.items():
@@ -453,7 +454,7 @@ class ShadowGitSnapshotStore:
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists() or path.is_symlink():
                 if path.is_dir() and not path.is_symlink():
-                    shutil.rmtree(path)
+                    _remove_tree(path)
                 else:
                     path.unlink()
             data = subprocess.run(["git", f"--git-dir={self.git_dir}", "cat-file", "blob",
