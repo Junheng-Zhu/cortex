@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from cortex.tools.base import SideEffectPolicy
 from .interfaces import ExecutionQueue, ExecutionStore, WorkerRegistry
-from .models import ExecutionError, ExecutionState, FailureKind, InfrastructureUnavailable, OwnershipLost
+from .models import ExecutionError, ExecutionState, FailureKind, InfrastructureUnavailable, OwnershipLost, TaskType
 
 
 def failure(kind, message, *, infrastructure=False, uncertain=False):
@@ -108,7 +108,13 @@ class RecoveryController:
                 return
             error = None
             if task.lost_from == 'RUNNING':
-                if task.side_effect_policy is SideEffectPolicy.NONE:
+                if task.task_type is TaskType.AGENT and not (
+                        task.side_effect_policy is SideEffectPolicy.NONE and
+                        task.recovery.get('agent_replay_safe') is True):
+                    error = failure(FailureKind.SIDE_EFFECT_UNCERTAIN,
+                        'Running Child lacks Worker-validated effect-free execution evidence; replay refused',
+                        infrastructure=True, uncertain=True)
+                elif task.side_effect_policy is SideEffectPolicy.NONE:
                     pass
                 elif task.side_effect_policy is SideEffectPolicy.WORKSPACE_REVERSIBLE and completed:
                     if task.attempt < task.max_attempts:
@@ -123,6 +129,9 @@ class RecoveryController:
                     error = failure(FailureKind.SIDE_EFFECT_UNCERTAIN,
                         'No durable, reversible completion evidence; automatic replay refused',
                         infrastructure=True, uncertain=True)
+            if (error is None and task.task_type is TaskType.AGENT and
+                    task.agent['deadline'] is not None and task.agent['deadline'] <= self.store.now()):
+                error = failure(FailureKind.DEADLINE_EXCEEDED, 'AgentTask absolute deadline exceeded')
             if error is None and task.attempt >= task.max_attempts:
                 error = failure(FailureKind.RETRY_EXHAUSTED, 'max_attempts reached')
             if error:

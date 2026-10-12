@@ -47,10 +47,12 @@ class AgentLoop:
         explicit_skills: list[str] | None = None,
         skill_candidate_limit: int = 5,
         workspace_recovery_runtime=None,
+        decision_in_thread: bool = False,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         self.llm = llm
+        self.decision_in_thread = decision_in_thread
         self.executor = executor
         self.workspace_recovery_runtime = (
             workspace_recovery_runtime or
@@ -351,6 +353,9 @@ class AgentLoop:
         """Minimal async state-machine path; LLM decisions remain synchronous."""
         if state.phase is AgentPhase.ACT:
             await self.aact(state)
+        elif state.phase is AgentPhase.DECIDE and self.decision_in_thread:
+            import asyncio
+            await asyncio.to_thread(self.decide, state)
         else:
             self.step(state)
         return state
@@ -622,12 +627,9 @@ class AgentLoop:
             self._save_checkpoint(state)
             return not stopped
 
-        if getattr(self.executor, "recovery_runtime", None) is not None:
-            await self.executor.aexecute_waves(
-                calls, commit_wave, contexts=execution_contexts
-            )
-        else:
-            await self.executor.aexecute_waves(calls, commit_wave)
+        await self.executor.aexecute_waves(
+            calls, commit_wave, contexts=execution_contexts
+        )
         batch_id = (committed_waves[0]["wave_id"].split(":", 1)[0]
                     if committed_waves else None)
         self.recorder.record(

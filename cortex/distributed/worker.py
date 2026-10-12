@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import socket
+import time
+import tempfile
 from uuid import uuid4
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from cortex.runtime.state import AgentState
 from cortex.tools.base import SideEffectPolicy
 from cortex.tools.executor import ToolExecutionContext
 from .interfaces import ExecutionQueue, ExecutionStore, WorkerRegistry
-from .models import FailureKind, InfrastructureUnavailable, OwnershipLost
+from .models import TaskType, FailureKind, InfrastructureUnavailable, OwnershipLost
 from .recovery import failure
 
 log = logging.getLogger(__name__)
@@ -44,13 +46,20 @@ def classify(result):
 
 class WorkerRuntime:
     def __init__(self, queue: ExecutionQueue, store: ExecutionStore, registry: WorkerRegistry, executor, *, worker_name='worker',
-                 lease_seconds=10, heartbeat_ttl=10, recovery=None, hook=None):
+                 lease_seconds=10, heartbeat_ttl=10, recovery=None, hook=None,
+                 agent_client_factory=None, agent_workspace=None, max_concurrent_agents=4):
         if lease_seconds <= 0 or heartbeat_ttl <= 0:
             raise ValueError('worker timers must be positive')
         self.queue, self.store, self.registry, self.executor = queue, store, registry, executor
         self.worker_id = f'{worker_name}-{os.getpid()}-{uuid4().hex}'
         self.lease_seconds, self.heartbeat_ttl = lease_seconds, heartbeat_ttl
         self.recovery, self.hook = recovery, hook
+        if type(max_concurrent_agents) is not int or max_concurrent_agents < 1:
+            raise ValueError('max_concurrent_agents must be positive')
+        self.agent_client_factory = agent_client_factory
+        self.agent_workspace = Path(agent_workspace or
+            (executor.recovery_runtime.snapshots.workspace if executor.recovery_runtime else Path.cwd()))
+        self.max_concurrent_agents = max_concurrent_agents
         self.stopping = False
         # Single ToolExecutor attempt per distributed attempt. Validation,
         # permissions, supervision and timeout remain owned by ToolExecutor.
@@ -135,6 +144,9 @@ class WorkerRuntime:
         if task.terminal:
             await asyncio.to_thread(self.queue.ack, message)
             return
+        if task.task_type is TaskType.AGENT:
+            await self._process_agent(task, message)
+            return
         # Check the trusted registry rather than trusting producer policy labels.
         try:
             tool = self.executor._get_tool(task.tool_name)
@@ -212,24 +224,155 @@ class WorkerRuntime:
             renewer.cancel()
             with suppress(asyncio.CancelledError): await renewer
 
+    async def _process_agent(self, task, message):
+        from .agent import (AgentDeadlineExceeded, agent_result, build_child,
+                            child_query, validate_agent)
+        child = None
+        started = time.perf_counter()
+
+        def guard():
+            # The same fenced mutation checks cancellation and expired ownership.
+            self.store.renew(task.lease, self.lease_seconds)
+            if task.agent['deadline'] is not None and self.store.now() >= task.agent['deadline']:
+                raise AgentDeadlineExceeded('AgentTask absolute deadline exceeded')
+
+        try:
+            spec, tools = validate_agent(task, self.executor)
+            if self.agent_client_factory is None:
+                raise ValueError('Worker requires an agent_client_factory for AGENT execution')
+        except Exception as exc:
+            with suppress(OwnershipLost, InfrastructureUnavailable):
+                error = failure(FailureKind.POLICY_MISMATCH, str(exc))
+                await asyncio.to_thread(self.store.finish, task.lease, False,
+                                        agent_result(task, error=error), error)
+                await asyncio.to_thread(self.queue.ack, message)
+            return
+
+        async def invoke():
+            nonlocal child
+            await self._hook('after_claim_before_start', task)
+            await asyncio.to_thread(guard)
+            running = await asyncio.to_thread(self.store.start, task.lease)
+            # Positive, runtime-owned evidence. A crash before this write fails
+            # closed if RUNNING; no model decides whether replay is safe.
+            await asyncio.to_thread(self.store.attach_recovery, task.lease,
+                                    {'agent_replay_safe': True})
+            await self._hook('after_start_before_tool', running)
+            with tempfile.TemporaryDirectory(prefix='cortex-child-') as storage:
+                client = await asyncio.to_thread(self.agent_client_factory)
+                child = build_child(client, task, self.executor, tools, guard,
+                                    self.agent_workspace, storage)
+                try:
+                    answer = await child.arun(child_query(spec))
+                    await asyncio.to_thread(guard)
+                    state = child.last_state
+                    error = None
+                    if not getattr(state, '_run_success', False):
+                        kind = (FailureKind.STEP_BUDGET_EXCEEDED if
+                                getattr(state, '_termination_reason', None) == 'max_steps'
+                                else FailureKind.AGENT_EXECUTION_ERROR)
+                        error = failure(kind, answer or 'Child AgentLoop failed')
+                    await self._hook('after_tool_before_result', running)
+                    return agent_result(task, child, answer=answer, error=error,
+                                        elapsed_ms=(time.perf_counter() - started) * 1000), error
+                finally:
+                    child.close()
+
+        expired = asyncio.Event()
+        lost = asyncio.Event()
+        operation = asyncio.create_task(invoke())
+
+        async def supervise():
+            while True:
+                await asyncio.sleep(min(.1, self.lease_seconds / 3))
+                try:
+                    await asyncio.to_thread(guard)
+                except AgentDeadlineExceeded:
+                    expired.set(); operation.cancel(); return
+                except (OwnershipLost, InfrastructureUnavailable):
+                    lost.set(); operation.cancel(); return
+
+        supervisor = asyncio.create_task(supervise())
+        try:
+            try:
+                payload, error = await operation
+            except asyncio.CancelledError:
+                if lost.is_set():
+                    return  # Cancellation/ownership loss is durably handled by store/recovery.
+                if not expired.is_set():
+                    raise
+                error = failure(FailureKind.DEADLINE_EXCEEDED, 'AgentTask absolute deadline exceeded')
+                payload = agent_result(task, child, error=error,
+                                       elapsed_ms=(time.perf_counter() - started) * 1000)
+            except AgentDeadlineExceeded as exc:
+                error = failure(FailureKind.DEADLINE_EXCEEDED, str(exc))
+                payload = agent_result(task, child, error=error)
+            except (OwnershipLost, InfrastructureUnavailable):
+                raise
+            except Exception as exc:
+                # ToolExecutor waves use TaskGroup, which wraps guard failures.
+                # Preserve fencing/infrastructure semantics through that wrapper.
+                def leaves(error):
+                    if isinstance(error, BaseExceptionGroup):
+                        return [leaf for item in error.exceptions for leaf in leaves(item)]
+                    return [error]
+                causes = leaves(exc)
+                if any(isinstance(e, (OwnershipLost, InfrastructureUnavailable)) for e in causes):
+                    return
+                kind = (FailureKind.DEADLINE_EXCEEDED if any(isinstance(e, AgentDeadlineExceeded)
+                        for e in causes) else FailureKind.AGENT_EXECUTION_ERROR)
+                error = failure(kind, f'{type(exc).__name__}: {exc}')
+                payload = agent_result(task, child, error=error,
+                                       elapsed_ms=(time.perf_counter() - started) * 1000)
+            if lost.is_set():
+                return
+            terminal = await asyncio.to_thread(self.store.finish, task.lease, error is None, payload, error)
+            supervisor.cancel()
+            await self._hook('after_result_before_ack', terminal)
+            await asyncio.to_thread(self.queue.ack, message)
+        except (OwnershipLost, InfrastructureUnavailable):
+            log.warning('Child ownership/durability unavailable; leaving delivery pending')
+        finally:
+            supervisor.cancel()
+            with suppress(asyncio.CancelledError): await supervisor
+            if not operation.done():
+                operation.cancel()
+                with suppress(asyncio.CancelledError): await operation
+
     async def run(self):
         await asyncio.to_thread(self.registry.register, self.worker_id,
             {'pid': os.getpid(), 'host': socket.gethostname()}, self.heartbeat_ttl)
         heartbeat = asyncio.create_task(self._heartbeat())
+        agents = set()
         try:
             while not self.stopping:
                 try:
+                    # Bounded Child concurrency; keep consuming after submit.
+                    # ToolTask execution remains sequential as in Worker V1.
+                    for completed in tuple(agents):
+                        if completed.done():
+                            agents.remove(completed)
+                            completed.result()
+                    if len(agents) >= self.max_concurrent_agents:
+                        await asyncio.wait(agents, timeout=.1, return_when=asyncio.FIRST_COMPLETED)
+                        continue
                     if self.recovery:
                         await asyncio.to_thread(self.recovery.recover_once)
                     message = await asyncio.to_thread(self.queue.receive, self.worker_id, 100)
                     if message and not self.stopping:
-                        await self.process(message)
+                        task = await asyncio.to_thread(self.store.get, message.execution_id)
+                        if task and task.task_type is TaskType.AGENT:
+                            agents.add(asyncio.create_task(self.process(message)))
+                        else:
+                            await self.process(message)
                 except InfrastructureUnavailable:
                     log.warning('Distributed infrastructure unavailable; no submission/completion assumed')
                     await asyncio.sleep(.2)
                 except OwnershipLost:
                     pass
         finally:
+            if agents:
+                await asyncio.gather(*agents)
             heartbeat.cancel()
             with suppress(asyncio.CancelledError): await heartbeat
             with suppress(InfrastructureUnavailable):
