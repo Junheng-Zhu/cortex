@@ -58,9 +58,13 @@ def build_agent(
     execution_checkpoint_store: ExecutionCheckpointStore | None = None,
     mutation_ledger: MutationLedger | None = None,
     workspace_snapshot_root: str | Path | None = None,
+    tool_registry: ToolRegistry | None = None,
+    artifact_store: ArtifactStore | None = None,
+    decision_in_thread: bool = False,
+    agent_delegation_client=None,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
-    registry = ToolRegistry()
+    registry = tool_registry if tool_registry is not None else ToolRegistry()
     workspace = Path(execution_workspace or PROJECT_ROOT).resolve()
     mode = WorkspaceMode(workspace_mode)
     manager = workspace_manager
@@ -77,7 +81,7 @@ def build_agent(
     if mode is WorkspaceMode.ISOLATED and not workspace_recovery_enabled:
         raise ValueError("isolated execution requires workspace recovery")
     isolated_storage = manager.root / ("state-" + workspace_session.session_id) if mode is WorkspaceMode.ISOLATED else None
-    artifact_store = ArtifactStore(isolated_storage / "artifacts") if isolated_storage else ArtifactStore()
+    artifact_store = artifact_store or (ArtifactStore(isolated_storage / "artifacts") if isolated_storage else ArtifactStore())
     if isolated_storage:
         # Explicitly injected persistent stores must also respect the main boundary.
         for component in (checkpoint_store, execution_checkpoint_store, mutation_ledger,
@@ -85,10 +89,11 @@ def build_agent(
             location = getattr(component, "path", None) or getattr(component, "db_path", None)
             if location and str(location) != ":memory:" and Path(location).resolve().is_relative_to(Path(workspace_session.main_root)):
                 raise ValueError("isolated runtime persistence must be outside main_root")
-    registry.register(ListNotesTool(workspace))
-    registry.register(ReadNoteTool(workspace))
-    registry.register(DeleteNoteTool(workspace))
-    registry.register(SlowTool())
+    if tool_registry is None:
+        registry.register(ListNotesTool(workspace))
+        registry.register(ReadNoteTool(workspace))
+        registry.register(DeleteNoteTool(workspace))
+        registry.register(SlowTool())
     if execution_backend is None or execution_backend == "local":
         shell_backend = LocalBackend(discover_bash, MAX_OUTPUT_CHARS, workspace, isolated=mode is WorkspaceMode.ISOLATED)
     elif execution_backend == "docker":
@@ -110,8 +115,9 @@ def build_agent(
         raise ValueError("Local backend workspace mismatch")
     if isinstance(shell_backend, DockerBackend) and shell_backend.config.workspace.resolve() != workspace:
         raise ValueError("Docker backend workspace mismatch")
-    registry.register(ShellTool(shell_backend, workspace))
-    registry.register(ReadArtifactChunkTool(artifact_store))
+    if tool_registry is None:
+        registry.register(ShellTool(shell_backend, workspace))
+        registry.register(ReadArtifactChunkTool(artifact_store))
     skill_registry = None
     skill_index = None
     if skills_enabled:
@@ -204,7 +210,13 @@ def build_agent(
         skills_enabled=skills_enabled,
         explicit_skills=explicit_skills,
         workspace_recovery_runtime=recovery,
+        decision_in_thread=decision_in_thread,
     )
+
+    if agent_delegation_client is not None:
+        from cortex.distributed.delegation import DelegateTaskTool
+        registry.register(DelegateTaskTool(agent_delegation_client, executor,
+            lambda: agent.last_state.run_id if agent.last_state else agent.session.last_run_id))
 
     agent.workspace_manager = manager
     agent.workspace_session = workspace_session

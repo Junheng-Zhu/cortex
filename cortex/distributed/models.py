@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 import hashlib
 import json
+import math
 from uuid import uuid4
 
 from cortex.tools.base import SideEffectPolicy
@@ -45,6 +46,59 @@ class FailureKind(str, Enum):
     RECOVERY_CONFLICT = 'RECOVERY_CONFLICT'
     RESULT_SERIALIZATION = 'RESULT_SERIALIZATION'
     CANCELLED = 'CANCELLED'
+    AGENT_EXECUTION_ERROR = 'AGENT_EXECUTION_ERROR'
+    STEP_BUDGET_EXCEEDED = 'STEP_BUDGET_EXCEEDED'
+    DEADLINE_EXCEEDED = 'DEADLINE_EXCEEDED'
+
+
+class TaskType(str, Enum):
+    TOOL = 'TOOL'
+    AGENT = 'AGENT'
+
+
+@dataclass(frozen=True)
+class AgentTaskSpec:
+    parent_run_id: str
+    goal: str
+    context: dict
+    allowed_tools: list[str]
+    parent_allowed_tools: list[str]
+    max_steps: int = 10
+    deadline: float | None = None  # Absolute Unix time, compared with the store clock.
+    child_session_id: str = field(default_factory=lambda: uuid4().hex)
+
+    def __post_init__(self):
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (self.parent_run_id, self.goal, self.child_session_id)):
+            raise ValueError('agent identity and goal must not be empty')
+        if (not isinstance(self.context, dict) or type(self.max_steps) is not int or
+                self.max_steps < 1 or not all(isinstance(k, str) for k in self.context)):
+            raise ValueError('invalid agent context or step budget')
+        for names in (self.allowed_tools, self.parent_allowed_tools):
+            if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+                raise ValueError('allowed_tools must be a list of tool names')
+        if 'delegate_task' in self.allowed_tools or not set(self.allowed_tools) <= set(self.parent_allowed_tools):
+            raise ValueError('Child tools exceed Parent authorization or enable recursive delegation')
+        if self.deadline is not None and (type(self.deadline) not in (int, float) or not math.isfinite(self.deadline)):
+            raise ValueError('deadline must be a finite absolute Unix timestamp')
+        json.dumps(asdict(self), allow_nan=False)
+
+
+@dataclass(frozen=True)
+class AgentTaskResult:
+    task_id: str
+    terminal_state: ExecutionState
+    final_answer: str | None
+    error: dict | None
+    statistics: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_task(cls, task):
+        if task.task_type is not TaskType.AGENT or not task.terminal:
+            raise ValueError('AgentTaskResult requires a terminal AGENT execution')
+        result = task.result or {}
+        return cls(task.execution_id, task.state, result.get('final_answer'), task.error,
+                   result.get('statistics', {}))
 
 
 @dataclass(frozen=True)
@@ -90,10 +144,19 @@ class ExecutionTask:
     lease_token: int = 0
     workspace_root: str | None = None
     workspace_generation: list[int] | None = None
+    task_type: TaskType = TaskType.TOOL
+    agent: dict | None = None
 
     def __post_init__(self):
         self.state = ExecutionState(self.state)
         self.side_effect_policy = SideEffectPolicy(self.side_effect_policy)
+        self.task_type = TaskType(self.task_type)
+        if self.task_type is TaskType.AGENT:
+            if self.agent is None:
+                raise ValueError('AGENT execution requires AgentTaskSpec')
+            self.agent = asdict(AgentTaskSpec(**self.agent))
+        elif self.agent is not None:
+            raise ValueError('TOOL execution cannot carry an AgentTaskSpec')
         if not all(isinstance(value, str) and value for value in
                    (self.execution_id, self.tool_call_id, self.tool_name, self.idempotency_key)):
             raise ValueError('execution identity fields must not be empty')
@@ -102,6 +165,10 @@ class ExecutionTask:
                 type(self.attempt) is not int or self.attempt < 0):
             raise ValueError('invalid arguments or attempt limits')
         json.dumps(self.to_dict(), allow_nan=False)
+
+    @property
+    def task_id(self):
+        return self.execution_id
 
     @property
     def terminal(self):
@@ -122,6 +189,11 @@ class ExecutionTask:
 
     def fingerprint(self):
         values = [self.tool_name, self.arguments, self.side_effect_policy, self.max_attempts, self.workspace_root, self.workspace_generation]
+        if self.task_type is TaskType.AGENT:
+            # A generated session ID is canonicalized by idempotent create, not
+            # part of logical request identity. Preserve TOOL V1 fingerprints.
+            spec = {k: v for k, v in self.agent.items() if k != 'child_session_id'}
+            values.extend([self.task_type, spec])
         return hashlib.sha256(json.dumps(values, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 

@@ -10,7 +10,7 @@ from .interfaces import QueueMessage
 from .models import ExecutionTask, ExecutionState, InfrastructureUnavailable, OwnershipLost
 
 
-JSON_FIELDS = ('arguments', 'result', 'outcome', 'error', 'recovery', 'workspace_generation')
+JSON_FIELDS = ('arguments', 'result', 'outcome', 'error', 'recovery', 'workspace_generation', 'agent')
 
 
 def guarded(method):
@@ -107,6 +107,13 @@ elseif op == 'finish' then
   return redis.error_reply('OWNERSHIP_LOST')
  end
  if a.success and t.state == 'CLAIMED' then return redis.error_reply('ILLEGAL_TRANSITION') end
+ if a.success and t.task_type == 'AGENT' then
+  local spec=cjson.decode(t.agent_json)
+  if spec.deadline ~= cjson.null and spec.deadline <= now then
+   a.success=false
+   a.error_json=cjson.encode({kind='DEADLINE_EXCEEDED', message='AgentTask absolute deadline exceeded', infrastructure=false, uncertain=false})
+  end
+ end
  if a.success then state('SUCCEEDED') else state('FAILED') end
  t.result_json=a.result_json; t.error_json=a.error_json; t.finished_at=now; release()
 elseif op == 'end' then
@@ -132,6 +139,22 @@ elseif op == 'cancel' then
 else
  return redis.error_reply('UNKNOWN_OPERATION')
 end
+-- Every AGENT terminal path (including cancel and recovery) persists the same
+-- result envelope in this ownership mutation, before a consumer can ACK.
+if t.task_type == 'AGENT' and (t.state == 'SUCCEEDED' or t.state == 'FAILED' or t.state == 'CANCELLED') then
+ local spec = cjson.decode(t.agent_json)
+ local result = cjson.decode(t.result_json)
+ if result == cjson.null then result = {} end
+ result.task_id=t.execution_id; result.terminal_state=t.state
+ result.success=t.state == 'SUCCEEDED'; result.error=cjson.decode(t.error_json)
+ if result.final_answer == nil then result.final_answer=cjson.null end
+ if result.statistics == nil then
+  result.statistics={attempt=t.attempt, child_session_id=spec.child_session_id,
+    steps=cjson.null, duration_ms=cjson.null, termination_reason=t.state,
+    total_tokens=cjson.null, token_limit_enforced=false}
+ end
+ t.result_json=cjson.encode(result)
+end
 raw = cjson.encode(t)
 redis.call('SET', KEYS[1], raw)
 return raw
@@ -155,7 +178,8 @@ class RedisExecutionStore:
         # User JSON is opaque to Lua: cjson would otherwise convert [] to {}
         # and truncate large numbers on each lifecycle mutation.
         for field in JSON_FIELDS:
-            values[field] = json.loads(values.pop(field + '_json'))
+            if field + '_json' in values:
+                values[field] = json.loads(values.pop(field + '_json'))
         return ExecutionTask(**values)
 
     @guarded

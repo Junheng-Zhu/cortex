@@ -62,3 +62,9 @@ def close_recovery(executor):
     if runtime:
         runtime.snapshots.close()
         runtime.ledger.connection.close()
+
+
+def make_agent_client(config):
+    """Explicit CLI opt-in; reuse the app's existing configured LLM client."""
+    from cortex.llm.client import LLMClient
+    return LLMClient()

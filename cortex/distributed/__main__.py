@@ -30,6 +30,8 @@ def parser():
     p.add_argument('--backend', choices=('local', 'docker'), default='local')
     p.add_argument('--isolated', action='store_true', help='Execution root is an existing isolated session; enable existing sandbox')
     p.add_argument('--factory', help='Trusted importable module:function(config) -> ToolExecutor')
+    p.add_argument('--agent-client-factory', help='Trusted module:function(config) -> LLM client; enables Child execution')
+    p.add_argument('--max-concurrent-agents', type=int, default=4)
     p.add_argument('--lease-seconds', type=float, default=10)
     p.add_argument('--heartbeat-ttl', type=float, default=10)
     p.add_argument('--min-idle-ms', type=int, default=1000)
@@ -54,11 +56,18 @@ async def serve(args, queue, store, registry):
         module, symbol = args.factory.split(':', 1)
         factory = getattr(importlib.import_module(module), symbol)
     executor = factory(vars(args))
+    agent_client_factory = None
+    if args.agent_client_factory:
+        module, symbol = args.agent_client_factory.split(':', 1)
+        client_factory = getattr(importlib.import_module(module), symbol)
+        agent_client_factory = lambda: client_factory(vars(args))
     evidence = WorkspaceRecoveryEvidence(executor.recovery_runtime) if executor.recovery_runtime else None
     controller = RecoveryController(queue, store, registry, workspace_evidence=evidence,
                                    lease_seconds=args.lease_seconds, min_idle_ms=args.min_idle_ms)
     runtime = WorkerRuntime(queue, store, registry, executor, worker_name=args.worker_name,
-        lease_seconds=args.lease_seconds, heartbeat_ttl=args.heartbeat_ttl, recovery=controller)
+        lease_seconds=args.lease_seconds, heartbeat_ttl=args.heartbeat_ttl, recovery=controller,
+        agent_client_factory=agent_client_factory, agent_workspace=args.workspace,
+        max_concurrent_agents=args.max_concurrent_agents)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
