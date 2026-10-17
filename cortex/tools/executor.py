@@ -77,6 +77,7 @@ class ToolExecutor:
         self.workspace_lock = recovery_runtime.snapshots.lock if recovery_runtime else None
         self.workspace_guard = None
         self._closed = False
+        self.async_resources = []
         self.last_batch_metrics: dict[str, Any] = {}
         # These are executor-owned, so concurrent batches/runs share limits.
         self._concurrency_semaphore = asyncio.Semaphore(max_tool_concurrency)
@@ -90,7 +91,10 @@ class ToolExecutor:
         return tool
 
     def _check_permission(self, tool: Tool) -> bool:
-        return tool.permission in self.allowed_permissions
+        allowed = tool.permission in self.allowed_permissions
+        if not allowed and hasattr(tool, "on_permission_denied"):
+            tool.on_permission_denied()
+        return allowed
 
     def _validate(self, tool: Tool, arguments) -> Any:
         normalized_arguments = dict(arguments)
@@ -107,7 +111,7 @@ class ToolExecutor:
 
     def _apply_runtime_limits(self, tool: Tool, validated_input: Any) -> Any:
         """Clamp a tool's requested timeout to the runtime hard limit."""
-        if not hasattr(validated_input, "timeout"):
+        if not getattr(tool, "accepts_runtime_timeout", True) or not hasattr(validated_input, "timeout"):
             return validated_input
         runtime_limit = self._runtime_timeout(tool)
         requested = validated_input.timeout
@@ -157,6 +161,12 @@ class ToolExecutor:
     def to_schema(self, tool_name: str) -> dict:
         tool = self._get_tool(tool_name)
 
+        if not self._check_permission(tool):
+            raise PermissionError("Permission denied")
+        if getattr(tool, "preserve_input_schema", False):
+            return {"type": "function", "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_model.model_json_schema(), "strict": False}
         return {
             "type": "function",
             "name": tool.name,
@@ -171,6 +181,8 @@ class ToolExecutor:
         schemas = []
 
         for tool_name in self.registry.list_tools():
+            if not self._check_permission(self._get_tool(tool_name)):
+                continue
             schema = self.to_schema(tool_name)
             schemas.append(schema)
 
@@ -266,6 +278,10 @@ class ToolExecutor:
 
     @staticmethod
     def _result(tool: Tool, outcome: ExecutionOutcome) -> ToolResult:
+        if outcome.success and isinstance(outcome.data, ToolResult):
+            outcome.data.tool_name = tool.name
+            outcome.data.attempts = outcome.attempts
+            return outcome.data
         return ToolResult(
             tool_name=tool.name,
             attempts=outcome.attempts,
@@ -278,6 +294,8 @@ class ToolExecutor:
 
     def close(self) -> None:
         """Idempotently release resources owned by registered tools."""
+        if self.async_resources:
+            raise RuntimeError("Async resources require await executor.aclose()")
         self._closed = True
         first_error = None
         for name in self.registry.list_tools():
@@ -288,6 +306,15 @@ class ToolExecutor:
                     first_error = exc
         if first_error is not None:
             raise first_error
+
+    async def aclose(self) -> None:
+        self._closed = True
+        try:
+            for resource in self.async_resources:
+                await resource.aclose()
+        finally:
+            self.async_resources.clear()
+            self.close()
 
     def __enter__(self):
         return self
@@ -483,7 +510,8 @@ class ToolExecutor:
             if tool.execution_strategy is ExecutionStrategy.BACKEND_SUPERVISED:
                 try:
                     outcome = ExecutionOutcome(True, None, attempts,
-                                               await tool.aexecute(validated))
+                                               await tool.aexecute_with_timeout(
+                                                   validated, self._runtime_timeout(tool)))
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

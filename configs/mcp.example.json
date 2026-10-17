@@ -1,0 +1,20 @@
+{
+  "enabled": false,
+  "allowed_servers": ["local_demo"],
+  "servers": [
+    {
+      "server_id": "local_demo",
+      "command": "python",
+      "args": ["tests/fixtures/mcp_server.py"],
+      "cwd": ".",
+      "env": {},
+      "required": true,
+      "connect_timeout": 10.0,
+      "call_timeout": 5.0,
+      "tools": {
+        "echo": {"permission": "READ", "side_effect_policy": "none"},
+        "add": {"permission": "READ", "side_effect_policy": "none"}
+      }
+    }
+  ]
+}
