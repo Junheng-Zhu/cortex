@@ -52,6 +52,10 @@ class Tool(ABC):
         """Async hook for backend-supervised tools."""
         return await asyncio.to_thread(self.execute, input)
 
+    async def aexecute_with_timeout(self, input: Any, timeout: float) -> Any:
+        """Pass the runtime deadline to backends that accept it."""
+        return await self.aexecute(input)
+
     @abstractmethod
     def execute(self, **kwargs) -> Any:
         raise NotImplementedError

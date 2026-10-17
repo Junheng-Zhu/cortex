@@ -62,9 +62,12 @@ def build_agent(
     artifact_store: ArtifactStore | None = None,
     decision_in_thread: bool = False,
     agent_delegation_client=None,
+    mcp_manager=None,
 ) -> AgentLoop:
     """Build the runtime agent with the note tools supported by this app."""
     registry = tool_registry if tool_registry is not None else ToolRegistry()
+    if mcp_manager is not None and (not mcp_manager.started or mcp_manager.registry is not registry):
+        raise ValueError("Inject a started MCPManager bound to tool_registry")
     workspace = Path(execution_workspace or PROJECT_ROOT).resolve()
     mode = WorkspaceMode(workspace_mode)
     manager = workspace_manager
@@ -186,6 +189,8 @@ def build_agent(
         recovery_runtime=recovery,
         **distributed_options,
     )
+    if mcp_manager is not None:
+        executor.async_resources.append(mcp_manager)
     durable_memory = memory_manager or MemoryManager(SQLiteMemoryStore(isolated_storage / "memory.db") if isolated_storage else SQLiteMemoryStore())
     episodic_store = session_store or (SQLiteSessionStore(isolated_storage / "sessions.db") if isolated_storage else SQLiteSessionStore())
     if session is None and session_id is not None:
@@ -228,6 +233,28 @@ def build_agent(
             recovery.workspace_guard = executor.workspace_guard
             recovery.workspace_session = workspace_session
             recovery.workspace_manager = manager
+    return agent
+
+
+async def async_build_agent(client: LLMClient, *, mcp_config=None, **kwargs) -> AgentLoop:
+    """Build on the caller's event loop; the returned agent owns MCP shutdown."""
+    if kwargs.get('mcp_manager') is not None:
+        raise ValueError('Use build_agent for an already started MCPManager')
+    config = None
+    if mcp_config is not None:
+        from cortex.mcp import MCPConfig, MCPManager, load_config
+        config = load_config(mcp_config) if isinstance(mcp_config, (str, Path)) else mcp_config
+        if not isinstance(config, MCPConfig):
+            raise ValueError('mcp_config must be MCPConfig or a JSON file path')
+    agent = build_agent(client, **kwargs)
+    if config is not None and config.enabled:
+        manager = MCPManager(config, agent.recorder)
+        agent.executor.async_resources.append(manager)
+        try:
+            await manager.start(agent.executor.registry, agent.executor.allowed_permissions)
+        except BaseException:
+            await agent.aclose()
+            raise
     return agent
 
 

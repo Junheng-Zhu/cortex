@@ -98,6 +98,15 @@ class AgentLoop:
         """Release runtime-scoped execution resources."""
         self.executor.close()
 
+    async def aclose(self) -> None:
+        await self.executor.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        await self.aclose()
+
     def __enter__(self):
         return self
 

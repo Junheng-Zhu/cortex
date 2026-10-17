@@ -9,6 +9,8 @@ class ToolRegistry:
 
     def register(self, tool: Tool):
 
+        if tool.name in self._tools:
+            raise ValueError(f"Duplicate tool name: {tool.name}")
         self._tools[tool.name] = tool
 
     def list_tools(self):
@@ -21,3 +23,10 @@ class ToolRegistry:
             raise ToolNotFoundError("工具未找到", name)
 
         return tool
+
+    def unregister(self, name: str, *, expected: Tool) -> bool:
+        """Remove only the registration owned by the caller."""
+        if self._tools.get(name) is not expected:
+            return False
+        del self._tools[name]
+        return True
